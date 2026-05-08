@@ -66,6 +66,13 @@ export type {
   PipelineResult,
 } from './pipeline/builder.js';
 
+export { parallel, pipelineWithParallel } from './pipeline/parallel.js';
+export type {
+  ParallelBranch,
+  JoinStrategy,
+  ParallelResult,
+} from './pipeline/parallel.js';
+
 // Events
 export { EventEmitter, globalEmitter } from './events/emitter.js';
 export type { LatticeEvent, LatticeEventType, LatticeEventHandler } from './events/emitter.js';
