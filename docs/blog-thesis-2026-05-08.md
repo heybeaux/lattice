@@ -58,7 +58,7 @@ We ran Lattice in shadow mode inside our production content generation pipeline 
 | **Pass rate** | **93.0%** (372/400) |
 | **Workflow failures** | **0** (zero pipelines crashed) |
 | **L1 pass rate** | 100% (structural validation always passed) |
-| **L2 pass rate** | 94.3% (150/159) |
+| **L2 pass rate** | 91.0% (91/100 actual L2 runs; 150 skipped by policy) |
 | **L3 pass rate** | 92.1% (222/241) |
 | **L3 confidence** | 99% in 0.8-1.0 band (239/241 calls) |
 
@@ -86,19 +86,28 @@ We ran Lattice in shadow mode inside our production content generation pipeline 
 
 The 28 failures didn't crash any pipelines. Every handoff that failed validation was caught by the circuit breaker, logged with full context (what the agent received, what it produced, why the judge rejected it), and the pipeline continued. This is the equivalent of a circuit breaker in a microservice architecture — it isolates failures and prevents them from propagating downstream.
 
-### 2. L2 is the right default tier for most handoffs
+### 2. L2 works for non-transformative steps, but fails on creative output
 
-L2 ran at 627ms mean latency — 40× faster than L3 — and passed 94.3% of the time. The 9 failures were all borderline cases (similarity between 0.804 and 0.847, just below the 0.85 threshold). When L2 was uncertain, it correctly escalated to L3, which caught the real problems.
+Here's the finding we didn't expect: of 100 handoffs where L2 actually ran, **91 escalated to L3**. Only 9 resolved at L2. The other 150 handoffs (drafter, reviewer, formatter) were configured to skip L2 entirely because embedding similarity is meaningless for creative steps — a prose draft is structurally nothing like a research outline, so similarity scores are always low.
 
-This confirms the escalation architecture: L1 + L2 run on every handoff by default, and L3 only fires when L2's confidence drops. Default latency stays under 1 second.
+This doesn't mean L2 is useless. It means L2 is a signal for **structural consistency**, not content quality. When input and output have the same shape (research → key points, outline → sections), L2 catches divergence. When input and output are fundamentally different (outline → prose), L2 is a pass-through to L3.
+
+The fix is per-step L2 configuration, which we added mid-benchmark: skip L2 for transformative steps, keep it for structural steps. This is the right architecture: L2 for "did the output change shape unexpectedly?", L3 for "is the output actually good?"
 
 ### 3. L3 is expensive but necessary for the hardest cases
 
 L3 took 25.4s on average (63s at P95), but it caught real problems: incomplete content, missing key points, word count violations, and hallucinated structure. The 99% confidence bimodality is particularly telling — when L3 is confident, it's very confident (0.8-1.0 band). There's almost no noise in the middle. Only 2 of 241 L3 calls landed in the uncertain 0.6-0.8 band.
 
-### 4. The research step is the hardest coordination problem
+### 4. The per-step configuration question
 
-Research had the lowest pass rate (78%) — not because the research was bad, but because transforming a topic into key points is inherently lossy. The L2 embedding similarity struggled with this because the output is structurally different from the input. This is exactly the kind of step where L3 escalation is valuable.
+Our initial design assumed L1+L2 would be the default for every handoff, with L3 escalating on uncertainty. The data showed that assumption was wrong for creative steps. The right configuration is:
+
+- **Research → Outline**: L1+L2 (both have similar structure)
+- **Outline → Draft**: L1+L3 directly (L2 is meaningless for creative output)
+- **Draft → Review**: L1+L3 (verdict is structurally different from content)
+- **Review → Format**: L1 only (formatting is deterministic, no semantic validation needed)
+
+This is a design lesson, not a bug. The tiered architecture supports per-step configuration — it just means you need to think about what each step is doing before choosing the validation tiers.
 
 ### 5. Trace continuity works end-to-end
 
