@@ -13,10 +13,10 @@ This gives us **real production benchmark data** (2,500+ handoff validations fro
 ```bash
 cd ~/forge
 
-# Copy the workflow
+# Copy the workflow (FIXED version — all steps wrapped with shadow mode)
 cp /path/to/lattice/forge-integration/lattice-docs-workflow.ts src/mastra/workflows/lattice-docs.ts
 
-# Copy the shadow mode wrapper (or install from npm)
+# Copy the shadow mode wrapper
 mkdir -p src/lattice
 cp /path/to/lattice/forge-integration/shadow-mode.ts src/lattice/shadow-mode.ts
 ```
@@ -42,7 +42,6 @@ Add to your Mastra instance (in `src/mastra/index.ts`):
 ```typescript
 import { latticeDocWorkflow } from './workflows/lattice-docs';
 
-// Register the workflow
 const mastra = new Mastra({
   // ... your existing config
   workflows: {
@@ -54,30 +53,53 @@ const mastra = new Mastra({
 
 ### 5. Run the Benchmark
 
+**Option A: Use the Node.js runner (recommended)**
+
 ```bash
 cd ~/forge
 
-# Run all 50 topics
-bash /path/to/lattice/forge-integration/run-benchmark.sh
+# Test first (5 topics)
+export LATTICE_MAX_TOPICS=5
+node /path/to/lattice/forge-integration/run-benchmark.mjs
 
-# Or run a subset for testing (first 5 topics)
-LATTICE_MAX_TOPICS=5 bash /path/to/lattice/forge-integration/run-benchmark.sh
+# Full run (50 topics)
+export LATTICE_MAX_TOPICS=50
+node /path/to/lattice/forge-integration/run-benchmark.mjs
+```
+
+**Option B: Manual trigger**
+
+```bash
+cd ~/forge
+node -e "
+const { mastra } = require('./src/mastra');
+const topics = require('/path/to/lattice/forge-integration/lattice-docs-topics.json');
+
+(async () => {
+  for (const topic of topics.slice(0, 5)) {
+    console.log('Running:', topic.topic);
+    try {
+      const result = await mastra.getWorkflow('lattice-doc-gen').execute({
+        inputData: {
+          topic: topic.topic,
+          docType: topic.docType,
+          targetAudience: topic.targetAudience || '',
+        },
+      });
+      console.log('  → Done:', result?.output?.metadata?.title || 'no title');
+    } catch (err) {
+      console.error('  → Failed:', err.message);
+    }
+  }
+})();
+"
 ```
 
 ### 6. Generate the Report
 
-After the benchmark completes:
-
 ```bash
-node /path/to/lattice/forge-integration/generate-report.js
+node /path/to/lattice/forge-integration/generate-report.js ./lattice-shadow-audit.jsonl
 ```
-
-This produces a JSON report with:
-- Total handoff validations
-- Pass/fail rates by tier
-- Latency distribution (L1, L2, L3)
-- Most common failure reasons
-- Redaction effectiveness
 
 ## Shadow Mode Explained
 
@@ -89,6 +111,37 @@ In shadow mode, Lattice:
 5. ❌ Does NOT modify outputs (original Forge output is preserved)
 
 This is critical because we're measuring Lattice's ability to **detect** failures, not **prevent** them. We want to know: "How many of Forge's handoffs would Lattice have flagged?"
+
+## How Shadow Wrapping Works
+
+Each step in the workflow is wrapped with `createShadowStep()`:
+
+```typescript
+// Pure step logic (no Lattice dependency)
+async function executeResearch(input) {
+  // ... agent call ...
+  return result;
+}
+
+// Shadow-wrapped version (logs everything)
+const wrappedExecute = createShadowStep(
+  'doc-research',
+  executeResearch,
+  shadowConfig,
+);
+
+// In the Mastra step:
+execute: async ({ inputData }) => {
+  return wrappedExecute(inputData, traceId, runId);
+}
+```
+
+The wrapper:
+1. Calls the original execute function
+2. Creates a State Contract from input/output
+3. Validates through L1/L2/L3
+4. Logs to JSONL (with redaction)
+5. Returns the original output (shadow mode = never blocks)
 
 ## Audit Log Format
 
@@ -125,15 +178,9 @@ Based on our synthetic benchmark:
 
 With 50 topics × 5 steps = **250 trace runs** × ~3 handoffs each = **~750 handoff validations**.
 
-## Publishing the Results
-
-Once we have the data:
-1. Publish the benchmark report to the Lattice repo
-2. Update the marketing site with real numbers
-3. Use it as the primary proof point for adoption
-
 ## Troubleshooting
 
 - **L3 timing out?** Increase the `l3ConfidenceThreshold` or switch to `gpt-4o-mini` (faster than `gpt-4o`)
 - **Audit log not writing?** Check that the directory exists and is writable
 - **Forge not finding the workflow?** Make sure the workflow is registered in the Mastra instance
+- **Zero validations in audit log?** Make sure you're using the FIXED workflow (all steps wrapped with `createShadowStep`)

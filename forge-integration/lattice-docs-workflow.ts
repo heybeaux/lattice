@@ -1,21 +1,25 @@
 /**
- * Lattice Documentation Generator — Forge Workflow
+ * Lattice Documentation Generator — Forge Workflow (FIXED)
  * 
  * Generates Lattice documentation content through Forge's multi-agent pipeline:
  * Research → Outline → Draft → Review → Format
  * 
  * Each step is wrapped with Lattice shadow mode to collect benchmark data.
+ * Every handoff produces a State Contract, gets validated through L1/L2/L3,
+ * and is logged to the JSONL audit file — WITHOUT blocking Forge's execution.
  * 
  * USAGE:
- * 1. Add this file to your Forge project: src/mastra/workflows/lattice-docs.ts
- * 2. Register the workflow in your Mastra instance
- * 3. Run with topic topics from lattice-docs-topics.json
+ * 1. Copy this file to: src/mastra/workflows/lattice-docs.ts
+ * 2. Copy shadow-mode.ts to: src/lattice/shadow-mode.ts
+ * 3. Install deps: npm install @heybeaux/lattice-core @heybeaux/lattice-provider-openai
+ * 4. Register the workflow in your Mastra instance
+ * 5. Run with topics from lattice-docs-topics.json
  */
 
 import { createStep, createWorkflow } from '@mastra/core/workflows';
 import { z } from 'zod';
 import { Agent } from '@mastra/core/agent';
-import { createShadowStep, generateTraceId } from '../../forge-integration/shadow-mode';
+import { createShadowStep, generateTraceId } from '../../lattice/shadow-mode';
 
 // ─── Configuration ──────────────────────────────────────────
 
@@ -82,9 +86,8 @@ const reviewOutputSchema = z.object({
   suggestions: z.array(z.string()),
 });
 
-// ─── Steps (wrapped with Lattice shadow mode) ──────────────
+// ─── Shadow mode config ────────────────────────────────────
 
-// Configure shadow mode
 const shadowConfig = {
   logPath: process.env.LATTICE_SHADOW_LOG ?? '/tmp/lattice-shadow-audit.jsonl',
   openaiApiKey: process.env.OPENAI_API_KEY ?? '',
@@ -92,17 +95,13 @@ const shadowConfig = {
   blockOnFailure: false,
 };
 
-// Step 1: Research
-const createResearchStep = () => createStep({
-  id: 'doc-research',
-  description: 'Researches the topic against Lattice documentation and competitor context',
-  inputSchema: docInputSchema,
-  outputSchema: researchOutputSchema,
-  execute: async ({ inputData }) => {
-    const agent = new Agent({
-      id: 'doc-researcher',
-      name: 'Documentation Researcher',
-      instructions: `You are a technical researcher for Lattice documentation.
+// ─── Original step logic (pure functions) ──────────────────
+
+async function executeResearch(input: { topic: string; docType: string; targetAudience?: string }) {
+  const agent = new Agent({
+    id: 'doc-researcher',
+    name: 'Documentation Researcher',
+    instructions: `You are a technical researcher for Lattice documentation.
 
 RULES:
 - Only reference facts from the Lattice context provided below
@@ -112,40 +111,28 @@ RULES:
 
 ${LATTICE_CONTEXT}${LATTICE_API_DOCS}
 
-Research the topic: "${inputData.topic}" (${inputData.docType})
+Research the topic: "${input.topic}" (${input.docType})
 
 Return key points to cover, relevant Lattice APIs, and competitor context.`,
-      model: 'openrouter/anthropic/claude-3.5-haiku',
-    });
+    model: 'openrouter/anthropic/claude-3.5-haiku',
+  });
 
-    const result = await agent.generate([
-      { role: 'user', content: `Research topic: ${inputData.topic}\nType: ${inputData.docType}\n${inputData.targetAudience ? `Audience: ${inputData.targetAudience}` : ''}` },
-    ]);
+  const result = await agent.generate([
+    { role: 'user', content: `Research topic: ${input.topic}\nType: ${input.docType}\n${input.targetAudience ? `Audience: ${input.targetAudience}` : ''}` },
+  ]);
 
-    // Parse the research output
-    return {
-      keyPoints: result.text.split('\n').filter(l => l.trim().startsWith('-')).map(l => l.replace(/^-\s*/, '')).slice(0, 10),
-      relatedApis: [],
-      competitorContext: '',
-    };
-  },
-});
+  return {
+    keyPoints: result.text.split('\n').filter(l => l.trim().startsWith('-')).map(l => l.replace(/^-\s*/, '')).slice(0, 10),
+    relatedApis: [],
+    competitorContext: '',
+  };
+}
 
-// Step 2: Outline
-const createOutlineStep = () => createStep({
-  id: 'doc-outline',
-  description: 'Creates a structured outline from research',
-  inputSchema: z.object({
-    topic: z.string(),
-    docType: z.string(),
-    research: z.string(),
-  }),
-  outputSchema: outlineOutputSchema,
-  execute: async ({ inputData }) => {
-    const agent = new Agent({
-      id: 'doc-architect',
-      name: 'Documentation Architect',
-      instructions: `You are a documentation architect. Create a clear, logical outline.
+async function executeOutline(input: { topic: string; docType: string; research: string }) {
+  const agent = new Agent({
+    id: 'doc-architect',
+    name: 'Documentation Architect',
+    instructions: `You are a documentation architect. Create a clear, logical outline.
 
 Rules:
 - Start with the user's problem, not the solution
@@ -155,37 +142,25 @@ Rules:
 
 ${LATTICE_CONTEXT}
 
-Create an outline for: "${inputData.topic}" (${inputData.docType})`,
-      model: 'openrouter/anthropic/claude-3.5-haiku',
-    });
+Create an outline for: "${input.topic}" (${input.docType})`,
+    model: 'openrouter/anthropic/claude-3.5-haiku',
+  });
 
-    const result = await agent.generate([
-      { role: 'user', content: inputData.research },
-    ]);
+  const result = await agent.generate([
+    { role: 'user', content: input.research },
+  ]);
 
-    return {
-      sections: [{ title: 'Introduction', subsections: [] }],
-      estimatedWordCount: inputData.docType === 'tutorial' ? 2000 : inputData.docType === 'guide' ? 1500 : 800,
-    };
-  },
-});
+  return {
+    sections: [{ title: 'Introduction', subsections: [] }],
+    estimatedWordCount: input.docType === 'tutorial' ? 2000 : input.docType === 'guide' ? 1500 : 800,
+  };
+}
 
-// Step 3: Draft
-const createDraftStep = () => createStep({
-  id: 'doc-drafter',
-  description: 'Writes the full content from the outline',
-  inputSchema: z.object({
-    topic: z.string(),
-    docType: z.string(),
-    outline: z.string(),
-    research: z.string(),
-  }),
-  outputSchema: draftOutputSchema,
-  execute: async ({ inputData }) => {
-    const agent = new Agent({
-      id: 'doc-drafter',
-      name: 'Content Drafter',
-      instructions: `You are a technical writer for Lattice documentation.
+async function executeDraft(input: { topic: string; docType: string; outline: string; research: string }) {
+  const agent = new Agent({
+    id: 'doc-drafter',
+    name: 'Content Drafter',
+    instructions: `You are a technical writer for Lattice documentation.
 
 VOICE:
 - Direct, no fluff
@@ -201,36 +176,26 @@ RULES:
 
 ${LATTICE_CONTEXT}${LATTICE_API_DOCS}
 
-Write the full content for: "${inputData.topic}" (${inputData.docType})`,
-      model: 'openrouter/anthropic/claude-sonnet-4-6',
-    });
+Write the full content for: "${input.topic}" (${input.docType})`,
+    model: 'openrouter/anthropic/claude-sonnet-4-6',
+  });
 
-    const result = await agent.generate([
-      { role: 'user', content: `Outline: ${inputData.outline}\n\nResearch: ${inputData.research}` },
-    ]);
+  const result = await agent.generate([
+    { role: 'user', content: `Outline: ${input.outline}\n\nResearch: ${input.research}` },
+  ]);
 
-    return {
-      title: inputData.topic,
-      content: result.text,
-      wordCount: result.text.split(/\s+/).length,
-    };
-  },
-});
+  return {
+    title: input.topic,
+    content: result.text,
+    wordCount: result.text.split(/\s+/).length,
+  };
+}
 
-// Step 4: Review
-const createReviewStep = () => createStep({
-  id: 'doc-reviewer',
-  description: 'Reviews the draft for accuracy, completeness, and voice',
-  inputSchema: z.object({
-    draft: z.string(),
-    topic: z.string(),
-  }),
-  outputSchema: reviewOutputSchema,
-  execute: async ({ inputData }) => {
-    const agent = new Agent({
-      id: 'doc-reviewer',
-      name: 'Documentation Reviewer',
-      instructions: `You are a documentation reviewer. Evaluate the draft.
+async function executeReview(input: { draft: string; topic: string }) {
+  const agent = new Agent({
+    id: 'doc-reviewer',
+    name: 'Documentation Reviewer',
+    instructions: `You are a documentation reviewer. Evaluate the draft.
 
 CHECKLIST:
 1. Factual accuracy — no invented APIs, features, or numbers
@@ -241,63 +206,172 @@ CHECKLIST:
 
 ${LATTICE_CONTEXT}
 
-Review the draft for: "${inputData.topic}"
+Review the draft for: "${input.topic}"
 
 Score 0-100. Flag any issues. Suggest improvements.`,
-      model: 'openrouter/anthropic/claude-sonnet-4-6',
-    });
+    model: 'openrouter/anthropic/claude-sonnet-4-6',
+  });
 
-    const result = await agent.generate([
-      { role: 'user', content: inputData.draft },
-    ]);
+  const result = await agent.generate([
+    { role: 'user', content: input.draft },
+  ]);
 
-    const text = result.text.toLowerCase();
-    const hasFlags = text.includes('issue') || text.includes('fix') || text.includes('incorrect');
-    
-    return {
-      passed: !hasFlags,
-      score: hasFlags ? 70 : 90,
-      flags: hasFlags ? ['Needs revision'] : [],
-      suggestions: [],
-    };
-  },
-});
+  const text = result.text.toLowerCase();
+  const hasFlags = text.includes('issue') || text.includes('fix') || text.includes('incorrect');
+  
+  return {
+    passed: !hasFlags,
+    score: hasFlags ? 70 : 90,
+    flags: hasFlags ? ['Needs revision'] : [],
+    suggestions: [],
+  };
+}
 
-// Step 5: Format
-const createFormatStep = () => createStep({
-  id: 'doc-formatter',
-  description: 'Formats the reviewed draft for publication',
-  inputSchema: z.object({
-    content: z.string(),
-    docType: z.string(),
-    review: z.string(),
-  }),
-  outputSchema: z.object({
-    formattedContent: z.string(),
-    metadata: z.object({
-      title: z.string(),
-      docType: z.string(),
-      wordCount: z.number(),
-    }),
-  }),
-  execute: async ({ inputData }) => {
-    // Simple formatting — add frontmatter, ensure clean markdown
-    const frontmatter = `---
-title: "${inputData.metadata?.title ?? 'Untitled'}"
-type: ${inputData.docType}
+async function executeFormat(input: { content: string; docType: string; metadata?: { title: string; docType: string; wordCount: number } }) {
+  const frontmatter = `---
+title: "${input.metadata?.title ?? 'Untitled'}"
+type: ${input.docType}
 ---
 
 `;
-    return {
-      formattedContent: frontmatter + inputData.content,
-      metadata: {
-        title: inputData.metadata?.title ?? 'Untitled',
-        docType: inputData.docType,
-        wordCount: inputData.content.split(/\s+/).length,
-      },
-    };
-  },
-});
+  return {
+    formattedContent: frontmatter + input.content,
+    metadata: {
+      title: input.metadata?.title ?? 'Untitled',
+      docType: input.docType,
+      wordCount: input.content.split(/\s+/).length,
+    },
+  };
+}
+
+// ─── Shadow-wrapped step factories ─────────────────────────
+
+function createResearchStep() {
+  const wrappedExecute = createShadowStep(
+    'doc-research',
+    executeResearch,
+    shadowConfig,
+  );
+
+  return createStep({
+    id: 'doc-research',
+    description: 'Researches the topic against Lattice documentation and competitor context',
+    inputSchema: docInputSchema,
+    outputSchema: researchOutputSchema,
+    execute: async ({ inputData }) => {
+      const traceId = generateTraceId();
+      const runId = `lattice-docs-${Date.now()}`;
+      return wrappedExecute(inputData, traceId, runId);
+    },
+  });
+}
+
+function createOutlineStep() {
+  const wrappedExecute = createShadowStep(
+    'doc-outline',
+    executeOutline,
+    shadowConfig,
+  );
+
+  return createStep({
+    id: 'doc-outline',
+    description: 'Creates a structured outline from research',
+    inputSchema: z.object({
+      topic: z.string(),
+      docType: z.string(),
+      research: z.string(),
+    }),
+    outputSchema: outlineOutputSchema,
+    execute: async ({ inputData }) => {
+      const traceId = generateTraceId();
+      const runId = `lattice-docs-${Date.now()}`;
+      return wrappedExecute(inputData, traceId, runId);
+    },
+  });
+}
+
+function createDraftStep() {
+  const wrappedExecute = createShadowStep(
+    'doc-drafter',
+    executeDraft,
+    shadowConfig,
+  );
+
+  return createStep({
+    id: 'doc-drafter',
+    description: 'Writes the full content from the outline',
+    inputSchema: z.object({
+      topic: z.string(),
+      docType: z.string(),
+      outline: z.string(),
+      research: z.string(),
+    }),
+    outputSchema: draftOutputSchema,
+    execute: async ({ inputData }) => {
+      const traceId = generateTraceId();
+      const runId = `lattice-docs-${Date.now()}`;
+      return wrappedExecute(inputData, traceId, runId);
+    },
+  });
+}
+
+function createReviewStep() {
+  const wrappedExecute = createShadowStep(
+    'doc-reviewer',
+    executeReview,
+    shadowConfig,
+  );
+
+  return createStep({
+    id: 'doc-reviewer',
+    description: 'Reviews the draft for accuracy, completeness, and voice',
+    inputSchema: z.object({
+      draft: z.string(),
+      topic: z.string(),
+    }),
+    outputSchema: reviewOutputSchema,
+    execute: async ({ inputData }) => {
+      const traceId = generateTraceId();
+      const runId = `lattice-docs-${Date.now()}`;
+      return wrappedExecute(inputData, traceId, runId);
+    },
+  });
+}
+
+function createFormatStep() {
+  const wrappedExecute = createShadowStep(
+    'doc-formatter',
+    executeFormat,
+    shadowConfig,
+  );
+
+  return createStep({
+    id: 'doc-formatter',
+    description: 'Formats the reviewed draft for publication',
+    inputSchema: z.object({
+      content: z.string(),
+      docType: z.string(),
+      metadata: z.object({
+        title: z.string(),
+        docType: z.string(),
+        wordCount: z.number(),
+      }).optional(),
+    }),
+    outputSchema: z.object({
+      formattedContent: z.string(),
+      metadata: z.object({
+        title: z.string(),
+        docType: z.string(),
+        wordCount: z.number(),
+      }),
+    }),
+    execute: async ({ inputData }) => {
+      const traceId = generateTraceId();
+      const runId = `lattice-docs-${Date.now()}`;
+      return wrappedExecute(inputData, traceId, runId);
+    },
+  });
+}
 
 // ─── Workflow ───────────────────────────────────────────────
 
