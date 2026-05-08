@@ -4,9 +4,21 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lattice-langgraph"
-version = "0.1.0"
+version = "0.2.1"
 description = "Lattice State Contract coordination layer for LangGraph workflows"
 readme = "README.md"
+keywords = ["lattice", "langgraph", "ai-agents", "coordination", "state-contract", "circuit-breaker"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 license = { text = "MIT" }
 requires-python = ">=3.10"
 dependencies = [
@@ -15,6 +27,12 @@ dependencies = [
     "openai>=1.0.0",
     "numpy>=1.24.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/heybeaux/lattice"
+Documentation = "https://heybeaux.github.io/lattice/"
+Repository = "https://github.com/heybeaux/lattice/tree/main/packages/adapter-langgraph"
+Issues = "https://github.com/heybeaux/lattice/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -30,3 +48,4 @@ packages = ["src/lattice_langgraph"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
