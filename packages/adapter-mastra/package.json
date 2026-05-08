@@ -1,7 +1,7 @@
 {
   "name": "@heybeaux/lattice-adapter-mastra",
-  "version": "0.1.0",
-  "description": "Mastra adapter for Lattice — wraps Mastra workflow steps with State Contracts and Circuit Breakers",
+  "version": "0.2.0",
+  "description": "Mastra adapter for Lattice \u2014 wraps Mastra workflow steps with State Contracts and Circuit Breakers",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",

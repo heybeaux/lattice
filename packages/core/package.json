@@ -1,6 +1,6 @@
 {
   "name": "@heybeaux/lattice-core",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Coordination infrastructure for multi-agent AI systems \u2014 State Contracts and Circuit Breakers",
   "type": "module",
   "main": "./dist/index.js",
