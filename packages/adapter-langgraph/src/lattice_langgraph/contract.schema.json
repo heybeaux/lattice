@@ -1,0 +1,211 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://lattice.dev/schemas/state-contract/v0.1.0.json",
+  "title": "State Contract",
+  "description": "Typed envelope for agent handoff coordination in Lattice",
+  "type": "object",
+  "required": [
+    "id",
+    "schemaVersion",
+    "traceId",
+    "fromAgent",
+    "timestamp",
+    "inputs",
+    "decisions",
+    "outputs",
+    "constraints",
+    "assumptions",
+    "budget",
+    "metadata"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier (ULID)",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "schemaVersion": {
+      "type": "string",
+      "description": "Envelope schema version (semver)",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$"
+    },
+    "traceId": {
+      "type": "string",
+      "description": "Cross-contract correlation ID for the full pipeline run",
+      "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+    },
+    "parentIds": {
+      "type": "array",
+      "description": "Array of upstream contract IDs (for future parallel/merge support)",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9A-HJKMNP-TV-Z]{26}$"
+      },
+      "default": []
+    },
+    "fromAgent": {
+      "type": "string",
+      "description": "Identifier of the producing agent"
+    },
+    "toAgent": {
+      "type": ["string", "null"],
+      "description": "Identifier of the consuming agent (null for fan-out)"
+    },
+    "timestamp": {
+      "type": "string",
+      "description": "ISO 8601 creation time",
+      "format": "date-time"
+    },
+    "inputs": {
+      "$ref": "#/definitions/ContractPayload"
+    },
+    "decisions": {
+      "type": "array",
+      "description": "Structured reasoning trace",
+      "items": {
+        "$ref": "#/definitions/Decision"
+      }
+    },
+    "outputs": {
+      "$ref": "#/definitions/ContractPayload"
+    },
+    "constraints": {
+      "type": "array",
+      "description": "What the agent could not do and why",
+      "items": {
+        "$ref": "#/definitions/Constraint"
+      }
+    },
+    "assumptions": {
+      "type": "array",
+      "description": "What the agent leaves for downstream agents to handle",
+      "items": {
+        "$ref": "#/definitions/Assumption"
+      }
+    },
+    "budget": {
+      "$ref": "#/definitions/BudgetRecord"
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional free-form key-value pairs"
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "ContractPayload": {
+      "type": "object",
+      "required": ["payload", "contentType"],
+      "properties": {
+        "payload": {
+          "description": "Opaque payload — preserved unchanged"
+        },
+        "contentType": {
+          "type": "string",
+          "description": "MIME type or schema URI"
+        },
+        "contentLength": {
+          "type": "integer",
+          "description": "Approximate size of payload in bytes"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Decision": {
+      "type": "object",
+      "required": ["type", "rationale"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["action", "routing", "fallback", "escalation", "other"]
+        },
+        "rationale": {
+          "type": "string",
+          "description": "Why this decision was made"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "context": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Constraint": {
+      "type": "object",
+      "required": ["description"],
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "warning", "error"],
+          "default": "info"
+        },
+        "context": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "Assumption": {
+      "type": "object",
+      "required": ["description"],
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "riskLevel": {
+          "type": "string",
+          "enum": ["low", "medium", "high"],
+          "default": "medium"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BudgetRecord": {
+      "type": "object",
+      "required": ["tokensUsed", "callsMade", "wallClockMs"],
+      "properties": {
+        "tokensUsed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "callsMade": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wallClockMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "estimatedCost": {
+          "type": "number",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "object",
+          "properties": {
+            "maxTokens": {
+              "type": "integer"
+            },
+            "maxCalls": {
+              "type": "integer"
+            },
+            "maxWallClockMs": {
+              "type": "integer"
+            },
+            "maxCost": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
