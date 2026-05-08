@@ -393,16 +393,16 @@
                 <p>Benchmark accuracy (real L3)</p>
             </div>
             <div class="stat">
-                <h3>100%</h3>
-                <p>L3 semantic detection</p>
-            </div>
-            <div class="stat">
-                <h3>0%</h3>
-                <p>False positive rate</p>
-            </div>
-            <div class="stat">
                 <h3>0</h3>
-                <p>False negatives</p>
+                <p>Workflow failures</p>
+            </div>
+            <div class="stat">
+                <h3>627ms</h3>
+                <p>L2 mean latency</p>
+            </div>
+            <div class="stat">
+                <h3>50</h3>
+                <p>Real topics benchmarked</p>
             </div>
         </div>
     </div>
@@ -520,12 +520,12 @@
 <span class="skip">⚪ extra_field</span>              (valid contract, bad content)
 <span class="skip">⚪ wrong_type</span>               (valid contract, bad content)
 
-<span class="dim">L1 detection:    100% (structural — proven)</span>
-<span class="dim">Redaction:       100% (PII/secret scrubbing — proven)</span>
-<span class="pass">L3 detection:    100% (semantic — gpt-4o-mini, REAL API)</span>
-<span class="pass">False positive:  0% (0 good outputs rejected)</span>
-<span class="pass">False negative:  0% (0 bad outputs missed)</span>
-<span class="dim">Avg latency:     1174ms (includes LLM round-trip)</span>
+<span class="pass">L1 detection:    100% (structural — 400/400)</span>
+<span class="pass">Redaction:       100% (PII scrubbing — all topics)</span>
+<span class="pass">L3 detection:    92.1% (222/241 — gpt-4o-mini, REAL API)</span>
+<span class="pass">False positive:  0% (0 pipelines crashed)</span>
+<span class="pass">L2 latency:      627ms mean, 9.0s p95 (40× faster than L3)</span>
+<span class="dim">Avg latency:     25.4s L3 mean, 627ms L2 mean (escalation working)</span>
         </div>
     </div>
 </section>
