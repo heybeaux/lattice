@@ -57,3 +57,11 @@ export { TieredCircuitBreaker } from './breaker/tiered.js';
 // wrapAgent
 export { wrapAgent, HandoffFailure } from './wrapper/wrap-agent.js';
 export type { WrapAgentConfig, WrappedAgent } from './wrapper/wrap-agent.js';
+
+// Pipeline
+export { pipeline, PipelineBuilder, PipelineExecutor } from './pipeline/builder.js';
+export type {
+  PipelineAgentConfig,
+  PipelineFailureBehavior,
+  PipelineResult,
+} from './pipeline/builder.js';
