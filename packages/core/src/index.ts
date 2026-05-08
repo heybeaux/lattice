@@ -28,8 +28,32 @@ export type { CreateContractOptions } from './contract/factory.js';
 
 // Validator
 export { SchemaValidator, validateContract } from './contract/validator.js';
-export type { ValidationResult } from './contract/validator.js';
+export type { ValidationResult as SchemaValidationResult } from './contract/validator.js';
 export {
   ContractValidationError,
   SchemaVersionError,
 } from './contract/validator.js';
+
+// Circuit Breaker types
+export type {
+  CircuitState,
+  CircuitBreakerConfig,
+  CircuitMetrics,
+} from './breaker/breaker.js';
+
+export type {
+  ValidationTier,
+  TieredCircuitBreakerConfig,
+  ValidationResult as TieredValidationResult,
+  EmbeddingProvider,
+  JudgeProvider,
+  JudgeResult,
+} from './breaker/types.js';
+
+// Circuit Breaker
+export { CircuitBreaker } from './breaker/breaker.js';
+export { TieredCircuitBreaker } from './breaker/tiered.js';
+
+// wrapAgent
+export { wrapAgent, HandoffFailure } from './wrapper/wrap-agent.js';
+export type { WrapAgentConfig, WrappedAgent } from './wrapper/wrap-agent.js';
