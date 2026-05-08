@@ -1,152 +1,149 @@
-# @heybeaux/lattice-core
+# Lattice
 
 **Coordination infrastructure for multi-agent AI systems.**
 
 [![npm](https://img.shields.io/npm/v/@heybeaux/lattice-core.svg)](https://www.npmjs.com/package/@heybeaux/lattice-core)
+[![npm](https://img.shields.io/npm/v/@heybeaux/lattice-provider-openai.svg)](https://www.npmjs.com/package/@heybeaux/lattice-provider-openai)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Benchmark](https://img.shields.io/badge/benchmark-85%25_accuracy-blue)](https://github.com/heybeaux/lattice/tree/main/benchmark)
 
 > Like threading libraries for concurrent programming — but for AI agents.
 
 Multi-agent AI systems fail at high rates due to **structural coordination failures**, not model quality. Lattice provides the primitives — State Contracts, Circuit Breakers, Pipeline orchestration — that make multi-agent systems reliable.
 
+## Status
+
+| Package | Version | Status | Notes |
+|---------|---------|--------|-------|
+| `@heybeaux/lattice-core` | v0.1.0 | ✅ Published | State Contracts, Circuit Breakers, Pipeline, Redaction, Events |
+| `@heybeaux/lattice-provider-openai` | v0.1.0 | ✅ Published | L2 embeddings + L3 LLM-as-judge via OpenAI |
+| `@heybeaux/lattice-adapter-mastra` | v0.1.0 | 🚧 Built, not published | Mastra step wrapper — needs peer dep cleanup |
+| LangGraph adapter | — | ❌ Not started | Highest priority — LangGraph is the biggest framework |
+
+## Real Benchmark Results (May 8, 2026)
+
+13 test scenarios with **actual OpenAI API calls** (gpt-4o-mini, no projections):
+
+| Metric | Result |
+|--------|--------|
+| **Overall accuracy** | **85%** (11/13 correct) |
+| **L3 semantic detection** | **100%** (6/6 hallucinations caught) |
+| **False positive rate** | **0%** (4/4 correct outputs passed) |
+| **False negatives** | **0** |
+| **Avg latency (L1+L3)** | 1,174ms (includes LLM round-trip) |
+
+Run it yourself: `npx tsx benchmark/run-real.ts`
+
+**What L3 caught every time:**
+- Empty output → confidence 1.00
+- Hallucinated facts (invented dates, events) → confidence 0.90
+- Invented citations → confidence 0.90
+- Completely off-topic content → confidence 0.00
+- Contradictory output → confidence 0.00
+- Partial/incomplete answers → confidence 0.90
+
+**What L3 correctly passed:**
+- Valid summary → confidence 1.00
+- Valid extraction → confidence 0.90
+- Valid formatted report → confidence 0.90
+- Short correct answer → confidence 1.00
+
+[Full benchmark code →](./benchmark/run-real.ts)
+
+## What's Honest About v0.1
+
+**What works well:**
+- L1 structural validation catches agent crashes and envelope violations 100% of the time
+- L3 semantic validation (with OpenAI provider) catches hallucinations, wrong content, and empty outputs 100% of the time
+- Zero false positives — correct outputs always pass
+- Redaction scrubs API keys, tokens, emails, phone numbers before logging
+- Pipeline builder composes agents with built-in coordination
+- Full audit trail: every handoff produces a State Contract
+
+**What's limited:**
+- L3 adds ~1-2s latency per handoff (LLM round-trip) — only use on critical steps
+- L2 (embedding similarity) is untested with real data — provider exists but no benchmarks
+- No framework adapters yet (LangGraph, CrewAI, AutoGen) — `wrapAgent()` works but requires manual wiring
+- No Reducer primitives (distributed-state synthesis) — the Silo-Bench finding is acknowledged but not addressed in code
+- No dashboard or observability UI — events go to EventEmitter but there's no built-in visualization
+- No production track record — the Forge integration hasn't happened yet
+
+**What's not a product (yet):**
+- This is a library, not a platform. You wire it up yourself.
+- No managed service, no SaaS, no "Lattice Cloud"
+- No drop-in replacement for LangGraph/CrewAI — it's a coordination layer that sits alongside them
+
 ## Quick Start
 
 ```bash
-npm install @heybeaux/lattice-core
+npm install @heybeaux/lattice-core @heybeaux/lattice-provider-openai
 ```
 
-### State Contracts
-
-Every agent handoff produces a State Contract — a typed envelope carrying full lineage:
-
 ```typescript
-import { createContract, validateContract } from '@heybeaux/lattice-core';
+import { pipeline, HandoffFailure } from '@heybeaux/lattice-core';
+import { createOpenAIJudgeProvider } from '@heybeaux/lattice-provider-openai';
 
-const contract = createContract({
-  fromAgent: 'researcher',
-  toAgent: 'writer',
-  inputs: { query: 'latest AI coordination papers' },
-  outputs: { summary: 'MAST: 41-87% failure rates across frameworks...', citations: [...] },
-  decisions: [{ type: 'action', rationale: 'chose synthesis approach' }],
-  budget: { tokensUsed: 4200, callsMade: 2, wallClockMs: 1850 },
-});
+const p = pipeline()
+  .agent('researcher', researchFn, { breaker: { tier: 'L1+L3' } })
+  .agent('writer', writeFn, { breaker: { tier: 'L1' } })
+  .onReject('retry', { maxRetries: 2 })
+  .build();
 
-// L1 validation (deterministic, zero LLM calls)
-const result = validateContract(contract);
-console.log(result.valid); // true
-```
-
-### wrapAgent
-
-Wrap any agent function to get coordination for free:
-
-```typescript
-import { wrapAgent, HandoffFailure } from '@heybeaux/lattice-core';
-
-const researcher = wrapAgent(
-  async (input: { query: string }) => {
-    const results = await search(input.query);
-    return { summary: results.map(r => r.summary).join('\n') };
-  },
-  {
-    id: 'researcher',
-    breaker: { tier: 'L1' }, // structural validation only
-  },
-);
+// Inject L3 judge
+const judge = createOpenAIJudgeProvider({ apiKey: process.env.OPENAI_API_KEY });
+// (In practice, inject via wrapAgent or Pipeline config)
 
 try {
-  const contract = await researcher({ query: 'AI coordination' });
-  console.log(contract.outputs.payload.summary);
-} catch (error) {
-  if (error instanceof HandoffFailure) {
-    console.error('Handoff rejected:', error.validation.reason);
+  const result = await p.execute({ query: 'AI coordination' });
+} catch (err) {
+  if (err instanceof HandoffFailure) {
+    console.error('Caught:', err.validation.reason);
+    console.error('Contract:', err.contract); // full audit trail
   }
 }
 ```
 
-### Pipeline
+## Examples
 
-Compose sequential agent handoffs with automatic coordination:
-
-```typescript
-import { pipeline, HandoffFailure } from '@heybeaux/lattice-core';
-
-const pipeline_ = pipeline()
-  .agent('researcher', researchFn, { breaker: { tier: 'L1+L3' } })
-  .agent('writer', writeFn, { breaker: { tier: 'L1' } })
-  .agent('editor', editFn, { breaker: { tier: 'L1' } })
-  .onReject('retry', { maxRetries: 2 })
-  .build();
-
-const result = await pipeline_.execute({ query: '...' });
-
-console.log(result.output);            // final editor output
-console.log(result.contracts.length);   // 3 (one per agent)
-console.log(result.hadRejected);        // any rejections?
-console.log(result.totalDurationMs);    // total pipeline time
-
-// All contracts share the same traceId
-const traceId = result.contracts[0].traceId;
-```
-
-### Circuit Breaker Tiers
-
-| Tier | What | Speed | Dependencies |
-|------|------|-------|-------------|
-| **L1** | JSON Schema validation | <200ms | None (built-in) |
-| **L2** | Embedding similarity | ~500ms | User-injected `EmbeddingProvider` |
-| **L3** | LLM-as-judge | 1-3s | User-injected `JudgeProvider` |
-
-```typescript
-import { TieredCircuitBreaker } from '@heybeaux/lattice-core';
-
-const breaker = new TieredCircuitBreaker({
-  tier: 'L1+L3',
-  l3ConfidenceThreshold: 0.8,
-  onReject: 'degrade', // continue with flagged contract
-});
-
-breaker.setJudgeProvider(myJudgeProvider);
-
-const result = await breaker.validate(contract);
-console.log(result.passed, result.confidence);
-```
-
-## API Reference
-
-| Export | Purpose |
-|--------|---------|
-| `createContract()` | Factory for State Contracts |
-| `validateContract()` | L1 schema validation |
-| `SchemaValidator` | Reusable schema validator instance |
-| `wrapAgent()` | Wrap agent functions with coordination |
-| `HandoffFailure` | Error thrown on validation rejection |
-| `pipeline()` | Build sequential agent pipelines |
-| `TieredCircuitBreaker` | Multi-tier validation with state machine |
-| `CircuitBreaker` | Classic closed/open/half-open state machine |
-| `EventEmitter` / `globalEmitter` | Typed coordination events |
-| `redactContract()` | PII scrubbing for logged contracts |
-
-## Examples & Benchmark
-
-- [**Quick Start Demo**](./examples/quick-start/demo.ts) — Run `npx tsx examples/quick-start/demo.ts` to see Lattice in action
-- [**Synthetic Benchmark**](./benchmark/README.md) — 16 fault scenarios, 75% projected detection with L1+L3
-- [**Forge Integration**](./FORGE_INTEGRATION.md) — Wrapping Forge's LinkedIn pipeline with Lattice
+- [**Quick Start Demo**](./examples/quick-start/demo.ts) — 4 scenarios: healthy pipeline, circuit breaker, redaction, degrade mode
+- [**Real Benchmark**](./benchmark/run-real.ts) — 13 fault scenarios with actual OpenAI API calls
+- [**Forge Integration Plan**](./FORGE_INTEGRATION.md) — How to wrap Forge's LinkedIn pipeline
 
 ## Documentation
 
-- [**THESIS.md**](https://github.com/heybeaux/lattice/blob/main/THESIS.md) — Research, architecture, and positioning
-- [**OpenSpec Proposal**](https://github.com/heybeaux/lattice/blob/main/openspec/changes/v0-1-state-contracts-and-circuit-breakers/proposal.md) — v0.1 scope and requirements
+- [**THESIS.md**](./THESIS.md) — Research, architecture, and positioning
+- [**OpenSpec Proposal**](./openspec/changes/v0-1-state-contracts-and-circuit-breakers/proposal.md) — v0.1 scope and requirements
+- [**Marketing Site**](https://heybeaux.github.io/lattice/)
 
-## Part of the heybeaux Ecosystem
+## Roadmap
 
-| Project | Purpose |
-|---------|---------|
-| [ACR](https://github.com/heybeaux/acr) | What agents CAN do (capability resolution) |
-| [Engram](https://github.com/heybeaux/engram) | What agents DID (episodic memory) |
-| [LeWM](https://github.com/heybeaux/le-wm) | What WILL happen (prediction) |
-| **Lattice** | How agents WORK TOGETHER (coordination) |
-| [AWM](https://github.com/heybeaux/awm) | What agents WILL do (pipeline prediction) |
+| Priority | Task | Status |
+|----------|------|--------|
+| 🔥 | LangGraph adapter (Python) | Not started — **highest priority** |
+| 🔥 | Forge integration (real traces benchmark) | Planned |
+| 🔥 | Reducer primitives (Silo-Bench synthesis fix) | Spec'd, not built |
+|  | adapter-mastra npm publish | Built, needs cleanup |
+| 🟡 | L2 embedding benchmark | Provider exists, no real data |
+| 🟢 | Dashboard / observability UI | Not started |
+
+## Ecosystem
+
+Lattice sits between agent frameworks and agents:
+
+```
+┌─────────────┐     ┌──────────┐     ┌─────────┐
+│ LangGraph   │────▶│ Lattice  │────▶│ Agents  │
+│ CrewAI      │────▶│ (coord)  │────▶│ (any)   │
+│ AutoGen     │────▶│          │────▶│         │
+│ Custom      │────▶│          │────▶│         │
+└─────────────┘     └──────────┘     └─────────┘
+                         │
+                    ┌────▼─────┐
+                    │ ACR      │ capabilities
+                    │ Engram   │ memory
+                    │ Parliament│ reasoning
+                    └──────────
+```
 
 ## License
 
@@ -154,4 +151,4 @@ MIT
 
 ---
 
-*Built by the heybeaux team. Because scaling agents requires scaling coordination.*
+*Built by the [heybeaux](https://github.com/heybeaux) team. Because scaling agents requires scaling coordination.*
