@@ -1,0 +1,55 @@
+{
+  "name": "@heybeaux/lattice-provider-openai",
+  "version": "0.1.0",
+  "description": "OpenAI provider for Lattice — L2 embeddings and L3 LLM-as-judge out of the box",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --sourcemap",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "lattice",
+    "openai",
+    "embeddings",
+    "llm-as-judge",
+    "circuit-breaker"
+  ],
+  "author": "heybeaux <https://heybeaux.dev>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/heybeaux/lattice.git",
+    "directory": "packages/provider-openai"
+  },
+  "dependencies": {
+    "@heybeaux/lattice-core": "workspace:*"
+  },
+  "peerDependencies": {
+    "openai": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "openai": {
+      "optional": false
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "openai": "^4.0.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  }
+}
