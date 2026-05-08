@@ -48,6 +48,12 @@
 - [ ] 5.8 Write unit tests for pipeline execution flows
 - [ ] 5.9 Write integration test for multi-agent pipeline
 
+## 5b. Contract Redaction
+- [ ] 5b.1 Implement `redactContract()` utility with schema-based field classification
+- [ ] 5b.2 Support `[REDACTED]` placeholder for sensitive values
+- [ ] 5b.3 Integrate redaction into logging pipeline (automatic before write)
+- [ ] 5b.4 Write tests for redaction coverage
+
 ## 6. Event Emission
 - [ ] 6.1 Implement local EventEmitter with typed events
 - [ ] 6.2 Implement OpenTelemetry span creation for contract lifecycle
@@ -71,9 +77,13 @@
 - [ ] 8.1 Integrate with Forge research→draft pipeline
 - [ ] 8.2 Replay 200 existing traces with Lattice instrumentation
 - [ ] 8.3 Measure baseline handoff failure rate vs. Lattice-protected rate
-- [ ] 8.4 Benchmark L1 overhead per validation (<200ms target)
-- [ ] 8.5 Benchmark L2 overhead per validation
-- [ ] 8.6 Publish benchmark results
+- [ ] 8.4 Build synthetic 4-agent pipeline (summarize → extract → validate → format) with injected faults
+- [ ] 8.5 Run synthetic pipeline with 50+ injected fault scenarios
+- [ ] 8.6 Measure fault detection rate (target: ≥40%)
+- [ ] 8.7 Benchmark L1 overhead per validation (<200ms p95 target)
+- [ ] 8.8 Benchmark L2 overhead per validation (<500ms p95 target)
+- [ ] 8.9 Benchmark L3 overhead with timeout enforcement
+- [ ] 8.10 Publish benchmark results + Forge trace analysis methodology
 
 ## 9. CI/CD
 - [ ] 9.1 Set up GitHub Actions for test, lint, build

@@ -72,11 +72,13 @@ function pipeline(): PipelineBuilder;
 
 ### Key Design Decisions
 
-#### 1. Zero Dependencies (Except JSON Schema Validator)
+#### 1. Tiered Dependencies
 
-The core package has exactly one runtime dependency: a JSON Schema validator. We'll use `ajv` (fastest, well-maintained). All other functionality is pure TypeScript.
+- **L1 validation**: Zero external dependencies except `ajv` (JSON Schema validator).
+- **L2 validation**: Requires user-injected `EmbeddingProvider` interface. Lattice ships the interface and an example OpenAI implementation, but no embedding model at runtime.
+- **L3 validation**: Requires user-injected `JudgeProvider` interface. Lattice ships the interface and an example LLM implementation, but no default LLM calls.
 
-This means consumers install Lattice without pulling in additional frameworks, OR tools, or model SDKs.
+This means L1 works out of the box with zero API keys. L2 and L3 are opt-in for users who want semantic validation.
 
 #### 2. wrapAgent() — The Integration Point
 
@@ -141,6 +143,20 @@ pipeline:completed
 pipeline:aborted
 ```
 
+#### 5b. Redaction Utility
+
+State Contracts contain agent inputs, outputs, and decisions — which may include PII, API keys, or other sensitive data. Before any contract is logged or exported, the `redactContract()` utility runs:
+
+- Fields are classified via the JSON Schema (`sensitivity: 'high'` annotation)
+- Sensitive values are replaced with `[REDACTED]` placeholder
+- Contract structure is preserved (field names remain for audit purposes)
+- Redaction is applied automatically by the logging pipeline
+
+```typescript
+const redacted = redactContract(contract, { sensitivityLevel: 'high' });
+// All fields marked as sensitive are replaced with [REDACTED]
+```
+
 #### 6. Immutability
 
 State Contracts are frozen with `Object.freeze()` after emission. Any modification attempt creates a new contract instance (copy-on-write). This ensures audit trail integrity.
@@ -152,6 +168,8 @@ State Contracts are frozen with `Object.freeze()` after emission. Any modificati
 | Reducer primitives | Requires fan-out topology understanding — v0.2 |
 | Deadlock detection | Requires cycle detection across agent graph — v0.2 |
 | Event bus (pub/sub) | Networked coordination — v0.2 |
+| Parallel/DAG execution | Sequential covers Forge use case; schema includes `parentIds` for forward compatibility — v0.2 |
+| Streaming output validation | Mid-stream error prevention is complex — v0.2 |
 | Framework adapters | Need to validate core API first — separate packages |
 | Networked/remote | In-process is the right starting point — v1.0 |
 

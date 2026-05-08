@@ -6,8 +6,9 @@
 The system SHALL provide a typed envelope that wraps every agent handoff with structured context. The envelope contains:
 
 - `id` — unique identifier (ULID)
-- `version` — envelope schema version (semver)
+- `schemaVersion` — envelope schema version (semver, mandatory from v0.1)
 - `traceId` — cross-contract correlation ID for the full pipeline run
+- `parentIds` — array of upstream contract IDs (for future parallel/merge support; empty array for sequential)
 - `fromAgent` — identifier of the producing agent
 - `toAgent` — identifier of the consuming agent (optional, null for fan-out)
 - `timestamp` — ISO 8601 creation time
@@ -24,7 +25,7 @@ The system SHALL provide a typed envelope that wraps every agent handoff with st
 - WHEN `wrapAgent()` finishes execution
 - THEN a State Contract is emitted containing all required fields
 - AND `id` is a valid ULID
-- AND `version` matches the current envelope schema version
+- AND `schemaVersion` matches the current envelope schema version
 
 #### Scenario: Contract preserves opaque payload types
 - GIVEN an agent that produces a structured output object
@@ -70,6 +71,21 @@ The system SHALL provide a `traceId` that links all contracts within a single pi
 - THEN all three contracts share the same `traceId`
 - AND can be retrieved together by `traceId`
 
+### Requirement: Contract Redaction
+The system SHALL provide a redaction utility that scrubs sensitive data from State Contracts before they are logged or exported.
+
+#### Scenario: Redaction removes sensitive fields
+- GIVEN a State Contract with fields marked as sensitive in the schema
+- WHEN the redaction utility is applied
+- THEN sensitive values are replaced with `[REDACTED]`
+- AND the contract structure is preserved (field names remain)
+
+#### Scenario: Redaction is applied before logging
+- GIVEN a pipeline with logging enabled
+- WHEN a State Contract is emitted
+- THEN the redaction utility runs before the contract is written to logs
+- AND no sensitive data appears in log output
+
 ### Requirement: Contract Event Emission
 The system SHALL emit events for contract lifecycle transitions via OpenTelemetry and a local EventEmitter.
 
@@ -86,10 +102,21 @@ The system SHALL emit events for contract lifecycle transitions via OpenTelemetr
 - THEN a `contract:rejected` event is emitted with the failure reason
 
 ### Requirement: Contract Envelope Versioning
-The system SHALL embed a semantic version in every contract envelope to support forward and backward compatibility.
+The system SHALL embed a `schemaVersion` (semver string) in every contract envelope. Version is mandatory — contracts without it are rejected. Backward-read compatibility is guaranteed within a major version. Forward-incompatible contracts are rejected with a clear error.
 
-#### Scenario: Version mismatch detection
+#### Scenario: Contract rejected without schemaVersion
+- GIVEN a contract envelope missing `schemaVersion`
+- WHEN validated
+- THEN validation fails with a `MISSING_SCHEMA_VERSION` error
+
+#### Scenario: Forward-incompatible contract rejected
+- GIVEN a contract created with schema version `0.2.0`
+- WHEN validated by a runtime expecting version `0.1.0`
+- THEN validation fails with a `FORWARD_INCOMPATIBLE` error
+- AND the error includes the required minimum runtime version
+
+#### Scenario: Backward-compatible upgrade
 - GIVEN a contract created with schema version `0.1.0`
-- WHEN validated by a consumer expecting version `0.2.0`
-- THEN the system detects the version mismatch
-- AND either upgrades (if backward compatible) or rejects with a clear error
+- WHEN validated by a runtime supporting version `0.1.x`
+- THEN validation proceeds normally
+- AND any new optional fields in the newer runtime are treated as undefined

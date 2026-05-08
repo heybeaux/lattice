@@ -124,8 +124,8 @@ The system SHALL validate that agent execution stayed within its allocated resou
 - THEN budget validation passes
 - AND remaining budget is recorded in the contract
 
-### Requirement: Pipeline Abort on Validation Failure
-The system SHALL provide configurable behavior when a circuit breaker rejects a contract.
+### Requirement: Error Recovery on Validation Failure
+The system SHALL provide configurable behavior when ANY circuit breaker tier (L1, L2, or L3) rejects a contract.
 
 Behaviors:
 - `abort` — stop the pipeline immediately (default)
@@ -133,18 +133,25 @@ Behaviors:
 - `retry` — re-execute the agent with enriched context (max N retries)
 - `degrade` — continue with the failed contract but flag it downstream
 
-#### Scenario: Pipeline aborts on rejection
+#### Scenario: Pipeline aborts on L1 rejection
 - GIVEN a pipeline with abort behavior
-- AND a circuit breaker that rejects a contract
+- AND a circuit breaker that rejects a contract at L1 (schema violation)
 - THEN the pipeline stops immediately
-- AND a `pipeline:aborted` event is emitted with the rejection reason
+- AND a `pipeline:aborted` event is emitted with the rejection reason and tier
 
-#### Scenario: Pipeline retries on rejection
+#### Scenario: Pipeline retries on L2 rejection
 - GIVEN a pipeline with retry behavior (max 2 retries)
-- AND a circuit breaker that rejects a contract
+- AND a circuit breaker that rejects a contract at L2 (semantic inconsistency)
 - THEN the agent is re-executed with the rejection reason as context
 - AND if it passes on retry, the pipeline continues
 - AND if it fails after max retries, the pipeline aborts
+
+#### Scenario: Pipeline degrades on L3 rejection
+- GIVEN a pipeline with degrade behavior
+- AND a circuit breaker that rejects a contract at L3 (LLM judge fails)
+- THEN the pipeline continues to the next agent
+- AND the failed contract is flagged with `validationStatus: 'rejected'`
+- AND downstream agents can inspect the flag
 
 ### Requirement: Zero-LLM Default Mode
 The system SHALL operate fully with L1-only validation (zero LLM calls) for cost-sensitive or offline deployments.
