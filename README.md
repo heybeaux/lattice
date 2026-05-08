@@ -127,6 +127,12 @@ console.log(result.passed, result.confidence);
 | `EventEmitter` / `globalEmitter` | Typed coordination events |
 | `redactContract()` | PII scrubbing for logged contracts |
 
+## Examples & Benchmark
+
+- [**Quick Start Demo**](./examples/quick-start/demo.ts) — Run `npx tsx examples/quick-start/demo.ts` to see Lattice in action
+- [**Synthetic Benchmark**](./benchmark/README.md) — 16 fault scenarios, 75% projected detection with L1+L3
+- [**Forge Integration**](./FORGE_INTEGRATION.md) — Wrapping Forge's LinkedIn pipeline with Lattice
+
 ## Documentation
 
 - [**THESIS.md**](https://github.com/heybeaux/lattice/blob/main/THESIS.md) — Research, architecture, and positioning
