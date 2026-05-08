@@ -65,3 +65,7 @@ export type {
   PipelineFailureBehavior,
   PipelineResult,
 } from './pipeline/builder.js';
+
+// Events
+export { EventEmitter, globalEmitter } from './events/emitter.js';
+export type { LatticeEvent, LatticeEventType, LatticeEventHandler } from './events/emitter.js';
