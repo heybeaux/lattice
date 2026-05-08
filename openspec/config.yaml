@@ -1,0 +1,5 @@
+# OpenSpec configuration for Lattice
+# https://github.com/Fission-AI/OpenSpec
+
+schema: openspec.v1
+profile: core
