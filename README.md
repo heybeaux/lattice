@@ -15,10 +15,10 @@ Multi-agent AI systems fail at high rates due to **structural coordination failu
 
 | Package | Version | Status | Notes |
 |---------|---------|--------|-------|
-| `@heybeaux/lattice-core` | v0.1.0 | ✅ Published | State Contracts, Circuit Breakers, Pipeline, Redaction, Events |
+| `@heybeaux/lattice-core` | v0.1.0 | ✅ Published | State Contracts, Circuit Breakers, Pipeline, Redaction, Events, ConsensusReducer |
 | `@heybeaux/lattice-provider-openai` | v0.1.0 | ✅ Published | L2 embeddings + L3 LLM-as-judge via OpenAI |
+| `lattice-langgraph` | — | ✅ Merged | Python package — wrap_node() + LatticeMiddleware, 13 tests |
 | `@heybeaux/lattice-adapter-mastra` | v0.1.0 | 🚧 Built, not published | Mastra step wrapper — needs peer dep cleanup |
-| LangGraph adapter | — | ❌ Not started | Highest priority — LangGraph is the biggest framework |
 
 ## Real Benchmark Results (May 8, 2026)
 
@@ -119,11 +119,13 @@ try {
 
 | Priority | Task | Status |
 |----------|------|--------|
-| 🔥 | LangGraph adapter (Python) | Not started — **highest priority** |
-| 🔥 | Forge integration (real traces benchmark) | Planned |
-| 🔥 | Reducer primitives (Silo-Bench synthesis fix) | Spec'd, not built |
-|  | adapter-mastra npm publish | Built, needs cleanup |
+| 🔥 | Forge integration (real traces benchmark) | In progress — Rook running 50 topics |
+| ✅ | LangGraph adapter (Python) | **Merged** — wrap_node() + LatticeMiddleware, 13 tests |
+| ✅ | ConsensusReducer (Silo-Bench synthesis fix) | **Built** — majority vote, conflict flagging |
+| 🔥 | `parallel()` + `join()` combinators | Not started — fan-out/fan-in for DAGs |
+|  | adapter-mastra npm publish | Built, needs peer dep cleanup |
 | 🟡 | L2 embedding benchmark | Provider exists, no real data |
+| 🟡 | JSON Schema IDL (canonical cross-language) | Not started |
 | 🟢 | Dashboard / observability UI | Not started |
 
 ## Ecosystem
