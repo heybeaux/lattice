@@ -1,5 +1,5 @@
 /**
- * Lattice Documentation Generator — Forge Workflow (FIXED)
+ * Lattice Documentation Generator — Forge Workflow (FIXED v2)
  * 
  * Generates Lattice documentation content through Forge's multi-agent pipeline:
  * Research → Outline → Draft → Review → Format
@@ -29,7 +29,7 @@ LATTICE PROJECT CONTEXT:
 - Packages: @heybeaux/lattice-core (npm), @heybeaux/lattice-provider-openai (npm)
 - GitHub: https://github.com/heybeaux/lattice
 - Website: https://heybeaux.github.io/lattice/
-- Core primitives: State Contracts, Circuit Breakers (L1/L2/L3), Pipeline Builder, EventEmitter, Redaction
+- Core primitives: State Contracts, Circuit Breakers (L1/L2/L3), Pipeline Builder, EventEmitter, Redaction, ConsensusReducer
 - Real benchmark: 85% accuracy, 100% L3 detection, 0% false positives (13 tests with gpt-4o-mini)
 - Target audience: AI teams building multi-agent systems who need reliability and compliance
 - Positioning: "Trust infrastructure for regulated AI" — compliance/governance layer between frameworks
@@ -47,43 +47,49 @@ KEY APIS:
 - CircuitBreaker — Classic closed/open/half-open state machine
 - EventEmitter / globalEmitter — 9 typed event types for coordination
 - redactContract() — PII scrubbing (API keys, emails, phone numbers)
+- ConsensusReducer — Merges N agent outputs with conflict resolution
 - createOpenAIEmbeddingProvider() — L2 via text-embedding-3-small
 - createOpenAIJudgeProvider() — L3 via gpt-4o-mini (configurable)
 `;
 
-// ─── Schemas ────────────────────────────────────────────────
+// ─── Shared step schema (data flows through the pipeline) ───
 
-const docInputSchema = z.object({
-  topic: z.string().describe('Documentation topic to generate'),
-  docType: z.enum(['guide', 'tutorial', 'api-reference', 'blog', 'social']).describe('Type of content'),
-  targetAudience: z.string().optional().describe('Target audience (e.g., "engineering managers", "compliance leads")'),
-});
+/**
+ * The data shape that flows through the entire pipeline.
+ * Each step ADDS to this shape, so the output of step N is a superset
+ * of the input of step N. This is the correct pattern for Mastra chaining.
+ */
+const pipelineStateSchema = z.object({
+  // Input from workflow
+  topic: z.string(),
+  docType: z.enum(['guide', 'tutorial', 'api-reference', 'blog', 'social']),
+  targetAudience: z.string().optional(),
 
-const researchOutputSchema = z.object({
-  keyPoints: z.array(z.string()).describe('Key points to cover'),
-  relatedApis: z.array(z.string()).describe('Relevant Lattice APIs to reference'),
-  competitorContext: z.string().optional().describe('How this relates to competing tools'),
-});
+  // Added by research step
+  keyPoints: z.array(z.string()).optional(),
+  relatedApis: z.array(z.string()).optional(),
+  competitorContext: z.string().optional(),
 
-const outlineOutputSchema = z.object({
+  // Added by outline step
   sections: z.array(z.object({
     title: z.string(),
     subsections: z.array(z.string()).optional(),
-  })),
-  estimatedWordCount: z.number(),
-});
+  })).optional(),
+  estimatedWordCount: z.number().optional(),
 
-const draftOutputSchema = z.object({
-  title: z.string(),
-  content: z.string(),
-  wordCount: z.number(),
-});
+  // Added by draft step
+  title: z.string().optional(),
+  content: z.string().optional(),
+  wordCount: z.number().optional(),
 
-const reviewOutputSchema = z.object({
-  passed: z.boolean(),
-  score: z.number(),
-  flags: z.array(z.string()),
-  suggestions: z.array(z.string()),
+  // Added by review step
+  reviewPassed: z.boolean().optional(),
+  reviewScore: z.number().optional(),
+  reviewFlags: z.array(z.string()).optional(),
+  reviewSuggestions: z.array(z.string()).optional(),
+
+  // Added by format step
+  formattedContent: z.string().optional(),
 });
 
 // ─── Shadow mode config ────────────────────────────────────
@@ -95,9 +101,9 @@ const shadowConfig = {
   blockOnFailure: false,
 };
 
-// ─── Original step logic (pure functions) ──────────────────
+// ─── Pure step logic (no Mastra, no Lattice) ───────────────
 
-async function executeResearch(input: { topic: string; docType: string; targetAudience?: string }) {
+async function executeResearch(state: z.infer<typeof pipelineStateSchema>) {
   const agent = new Agent({
     id: 'doc-researcher',
     name: 'Documentation Researcher',
@@ -111,24 +117,27 @@ RULES:
 
 ${LATTICE_CONTEXT}${LATTICE_API_DOCS}
 
-Research the topic: "${input.topic}" (${input.docType})
+Research the topic: "${state.topic}" (${state.docType})
 
 Return key points to cover, relevant Lattice APIs, and competitor context.`,
     model: 'openrouter/anthropic/claude-3.5-haiku',
   });
 
   const result = await agent.generate([
-    { role: 'user', content: `Research topic: ${input.topic}\nType: ${input.docType}\n${input.targetAudience ? `Audience: ${input.targetAudience}` : ''}` },
+    { role: 'user', content: `Research topic: ${state.topic}\nType: ${state.docType}\n${state.targetAudience ? `Audience: ${state.targetAudience}` : ''}` },
   ]);
 
+  const keyPoints = result.text.split('\n').filter(l => l.trim().startsWith('-')).map(l => l.replace(/^-\s*/, '')).slice(0, 10);
+
   return {
-    keyPoints: result.text.split('\n').filter(l => l.trim().startsWith('-')).map(l => l.replace(/^-\s*/, '')).slice(0, 10),
-    relatedApis: [],
+    ...state,
+    keyPoints,
+    relatedApis: [] as string[],
     competitorContext: '',
   };
 }
 
-async function executeOutline(input: { topic: string; docType: string; research: string }) {
+async function executeOutline(state: z.infer<typeof pipelineStateSchema>) {
   const agent = new Agent({
     id: 'doc-architect',
     name: 'Documentation Architect',
@@ -142,21 +151,24 @@ Rules:
 
 ${LATTICE_CONTEXT}
 
-Create an outline for: "${input.topic}" (${input.docType})`,
+Create an outline for: "${state.topic}" (${state.docType})
+
+Research context: ${(state.keyPoints ?? []).join('\n')}`,
     model: 'openrouter/anthropic/claude-3.5-haiku',
   });
 
   const result = await agent.generate([
-    { role: 'user', content: input.research },
+    { role: 'user', content: `Create an outline for: ${state.topic} (${state.docType})\n\nKey points: ${(state.keyPoints ?? []).join('\n')}` },
   ]);
 
   return {
+    ...state,
     sections: [{ title: 'Introduction', subsections: [] }],
-    estimatedWordCount: input.docType === 'tutorial' ? 2000 : input.docType === 'guide' ? 1500 : 800,
+    estimatedWordCount: state.docType === 'tutorial' ? 2000 : state.docType === 'guide' ? 1500 : 800,
   };
 }
 
-async function executeDraft(input: { topic: string; docType: string; outline: string; research: string }) {
+async function executeDraft(state: z.infer<typeof pipelineStateSchema>) {
   const agent = new Agent({
     id: 'doc-drafter',
     name: 'Content Drafter',
@@ -176,22 +188,26 @@ RULES:
 
 ${LATTICE_CONTEXT}${LATTICE_API_DOCS}
 
-Write the full content for: "${input.topic}" (${input.docType})`,
+Write the full content for: "${state.topic}" (${state.docType})`,
     model: 'openrouter/anthropic/claude-sonnet-4-6',
   });
 
+  const sections = (state.sections ?? []).map(s => s.title).join('\n');
+  const keyPoints = (state.keyPoints ?? []).join('\n');
+
   const result = await agent.generate([
-    { role: 'user', content: `Outline: ${input.outline}\n\nResearch: ${input.research}` },
+    { role: 'user', content: `Write the full content for: ${state.topic} (${state.docType})\n\nOutline sections:\n${sections}\n\nKey points:\n${keyPoints}` },
   ]);
 
   return {
-    title: input.topic,
+    ...state,
+    title: state.topic,
     content: result.text,
     wordCount: result.text.split(/\s+/).length,
   };
 }
 
-async function executeReview(input: { draft: string; topic: string }) {
+async function executeReview(state: z.infer<typeof pipelineStateSchema>) {
   const agent = new Agent({
     id: 'doc-reviewer',
     name: 'Documentation Reviewer',
@@ -206,42 +222,49 @@ CHECKLIST:
 
 ${LATTICE_CONTEXT}
 
-Review the draft for: "${input.topic}"
+Review the draft for: "${state.topic}"
 
 Score 0-100. Flag any issues. Suggest improvements.`,
     model: 'openrouter/anthropic/claude-sonnet-4-6',
   });
 
   const result = await agent.generate([
-    { role: 'user', content: input.draft },
+    { role: 'user', content: state.content ?? '' },
   ]);
 
   const text = result.text.toLowerCase();
   const hasFlags = text.includes('issue') || text.includes('fix') || text.includes('incorrect');
   
   return {
-    passed: !hasFlags,
-    score: hasFlags ? 70 : 90,
-    flags: hasFlags ? ['Needs revision'] : [],
-    suggestions: [],
+    ...state,
+    reviewPassed: !hasFlags,
+    reviewScore: hasFlags ? 70 : 90,
+    reviewFlags: hasFlags ? ['Needs revision'] : [],
+    reviewSuggestions: [],
   };
 }
 
-async function executeFormat(input: { content: string; docType: string; metadata?: { title: string; docType: string; wordCount: number } }) {
+async function executeFormat(state: z.infer<typeof pipelineStateSchema>) {
   const frontmatter = `---
-title: "${input.metadata?.title ?? 'Untitled'}"
-type: ${input.docType}
+title: "${state.title ?? state.topic}"
+type: ${state.docType}
 ---
 
 `;
   return {
-    formattedContent: frontmatter + input.content,
-    metadata: {
-      title: input.metadata?.title ?? 'Untitled',
-      docType: input.docType,
-      wordCount: input.content.split(/\s+/).length,
-    },
+    ...state,
+    formattedContent: frontmatter + (state.content ?? ''),
   };
+}
+
+// ─── Shared trace/run ID (threaded through all steps) ──────
+
+let currentTraceId = '';
+let currentRunId = '';
+
+function initTraceIds() {
+  currentTraceId = generateTraceId();
+  currentRunId = `lattice-docs-${Date.now()}`;
 }
 
 // ─── Shadow-wrapped step factories ─────────────────────────
@@ -256,12 +279,11 @@ function createResearchStep() {
   return createStep({
     id: 'doc-research',
     description: 'Researches the topic against Lattice documentation and competitor context',
-    inputSchema: docInputSchema,
-    outputSchema: researchOutputSchema,
+    inputSchema: pipelineStateSchema,
+    outputSchema: pipelineStateSchema,
     execute: async ({ inputData }) => {
-      const traceId = generateTraceId();
-      const runId = `lattice-docs-${Date.now()}`;
-      return wrappedExecute(inputData, traceId, runId);
+      initTraceIds();
+      return wrappedExecute(inputData, currentTraceId, currentRunId);
     },
   });
 }
@@ -276,16 +298,10 @@ function createOutlineStep() {
   return createStep({
     id: 'doc-outline',
     description: 'Creates a structured outline from research',
-    inputSchema: z.object({
-      topic: z.string(),
-      docType: z.string(),
-      research: z.string(),
-    }),
-    outputSchema: outlineOutputSchema,
+    inputSchema: pipelineStateSchema,
+    outputSchema: pipelineStateSchema,
     execute: async ({ inputData }) => {
-      const traceId = generateTraceId();
-      const runId = `lattice-docs-${Date.now()}`;
-      return wrappedExecute(inputData, traceId, runId);
+      return wrappedExecute(inputData, currentTraceId, currentRunId);
     },
   });
 }
@@ -300,17 +316,10 @@ function createDraftStep() {
   return createStep({
     id: 'doc-drafter',
     description: 'Writes the full content from the outline',
-    inputSchema: z.object({
-      topic: z.string(),
-      docType: z.string(),
-      outline: z.string(),
-      research: z.string(),
-    }),
-    outputSchema: draftOutputSchema,
+    inputSchema: pipelineStateSchema,
+    outputSchema: pipelineStateSchema,
     execute: async ({ inputData }) => {
-      const traceId = generateTraceId();
-      const runId = `lattice-docs-${Date.now()}`;
-      return wrappedExecute(inputData, traceId, runId);
+      return wrappedExecute(inputData, currentTraceId, currentRunId);
     },
   });
 }
@@ -325,15 +334,10 @@ function createReviewStep() {
   return createStep({
     id: 'doc-reviewer',
     description: 'Reviews the draft for accuracy, completeness, and voice',
-    inputSchema: z.object({
-      draft: z.string(),
-      topic: z.string(),
-    }),
-    outputSchema: reviewOutputSchema,
+    inputSchema: pipelineStateSchema,
+    outputSchema: pipelineStateSchema,
     execute: async ({ inputData }) => {
-      const traceId = generateTraceId();
-      const runId = `lattice-docs-${Date.now()}`;
-      return wrappedExecute(inputData, traceId, runId);
+      return wrappedExecute(inputData, currentTraceId, currentRunId);
     },
   });
 }
@@ -348,27 +352,10 @@ function createFormatStep() {
   return createStep({
     id: 'doc-formatter',
     description: 'Formats the reviewed draft for publication',
-    inputSchema: z.object({
-      content: z.string(),
-      docType: z.string(),
-      metadata: z.object({
-        title: z.string(),
-        docType: z.string(),
-        wordCount: z.number(),
-      }).optional(),
-    }),
-    outputSchema: z.object({
-      formattedContent: z.string(),
-      metadata: z.object({
-        title: z.string(),
-        docType: z.string(),
-        wordCount: z.number(),
-      }),
-    }),
+    inputSchema: pipelineStateSchema,
+    outputSchema: pipelineStateSchema,
     execute: async ({ inputData }) => {
-      const traceId = generateTraceId();
-      const runId = `lattice-docs-${Date.now()}`;
-      return wrappedExecute(inputData, traceId, runId);
+      return wrappedExecute(inputData, currentTraceId, currentRunId);
     },
   });
 }
@@ -377,20 +364,13 @@ function createFormatStep() {
 
 export const latticeDocWorkflow = createWorkflow({
   id: 'lattice-doc-gen',
-  inputSchema: docInputSchema,
-  outputSchema: z.object({
-    content: z.string(),
-    metadata: z.object({
-      title: z.string(),
-      docType: z.string(),
-      wordCount: z.number(),
-    }),
-  }),
+  inputSchema: pipelineStateSchema.pick({ topic: true, docType: true, targetAudience: true }),
+  outputSchema: pipelineStateSchema.pick({ formattedContent: true, title: true, docType: true, wordCount: true }),
 })
   .then(createResearchStep())
   .then(createOutlineStep())
   .then(createDraftStep())
   .then(createReviewStep())
-  .then(createFormatStep);
+  .then(createFormatStep());
 
 latticeDocWorkflow.commit();
