@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lattice — Observability Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --bg: #0a0a0f;
+            --bg-card: #12121a;
+            --bg-code: #1a1a24;
+            --border: #2a2a3a;
+            --text: #e8e8f0;
+            --text-muted: #8888a0;
+            --accent: #6366f1;
+            --accent-light: #818cf8;
+            --green: #22c55e;
+            --red: #ef4444;
+            --yellow: #eab308;
+            --cyan: #06b6d4;
+            --mono: 'SF Mono', 'Fira Code', monospace;
+            --sans: -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: var(--sans);
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+        }
+        .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+
+        /* Nav */
+        nav {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+            background: rgba(10, 10, 15, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+        }
+        nav .container {
+            display: flex; align-items: center; justify-content: space-between;
+            height: 56px;
+        }
+        nav .logo { font-weight: 700; font-size: 1.1rem; letter-spacing: -0.02em; }
+        nav .logo span { color: var(--accent); }
+        nav .links { display: flex; gap: 24px; }
+        nav .links a {
+            color: var(--text-muted); text-decoration: none; font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        nav .links a:hover { color: var(--text); }
+
+        /* Hero */
+        .hero {
+            padding: 100px 0 60px;
+            text-align: center;
+            border-bottom: 1px solid var(--border);
+        }
+        .hero h1 {
+            font-size: clamp(2rem, 4vw, 3rem);
+            font-weight: 800; letter-spacing: -0.03em; line-height: 1.1;
+            margin-bottom: 16px;
+        }
+        .hero .subtitle {
+            font-size: 1.1rem; color: var(--text-muted); max-width: 600px; margin: 0 auto;
+        }
+
+        /* Summary Cards */
+        .summary {
+            padding: 40px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .summary .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 20px;
+        }
+        .summary .card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+            text-align: center;
+        }
+        .summary .card .value {
+            font-size: 2.2rem; font-weight: 800; letter-spacing: -0.02em;
+        }
+        .summary .card .label {
+            color: var(--text-muted); font-size: 0.85rem; margin-top: 4px;
+        }
+        .value.green { color: var(--green); }
+        .value.red { color: var(--red); }
+        .value.accent { color: var(--accent-light); }
+
+        /* Sections */
+        .section {
+            padding: 60px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .section h2 {
+            font-size: 1.5rem; font-weight: 700; margin-bottom: 24px;
+            letter-spacing: -0.02em;
+        }
+
+        /* Charts */
+        .charts {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 24px;
+        }
+        .chart-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px;
+        }
+        .chart-card h3 {
+            font-size: 1rem; font-weight: 600; margin-bottom: 16px;
+        }
+        .chart-container {
+            position: relative;
+            height: 250px;
+        }
+
+        /* Step Table */
+        .step-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .step-table th, .step-table td {
+            text-align: left;
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border);
+            font-size: 0.9rem;
+        }
+        .step-table th {
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge.green { background: rgba(34, 197, 94, 0.15); color: var(--green); }
+        .badge.red { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+        .badge.yellow { background: rgba(234, 179, 8, 0.15); color: var(--yellow); }
+
+        /* Failure Log */
+        .failure-log {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .failure-entry {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 12px;
+        }
+        .failure-entry .header {
+            display: flex; justify-content: space-between; align-items: center;
+            margin-bottom: 8px;
+        }
+        .failure-entry .step {
+            font-family: var(--mono); font-size: 0.85rem; color: var(--accent-light);
+        }
+        .failure-entry .reason {
+            color: var(--text-muted); font-size: 0.85rem; line-height: 1.5;
+        }
+
+        /* Footer */
+        footer {
+            padding: 32px 0;
+            text-align: center;
+            color: var(--text-muted); font-size: 0.85rem;
+        }
+        footer a { color: var(--accent-light); text-decoration: none; }
+
+        @media (max-width: 768px) {
+            .charts { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <nav>
+        <div class="container">
+            <div class="logo">lattice<span>.</span></div>
+            <div class="links">
+                <a href="#summary">Summary</a>
+                <a href="#tiers">Tiers</a>
+                <a href="#steps">Steps</a>
+                <a href="#failures">Failures</a>
+                <a href="https://github.com/heybeaux/lattice">GitHub</a>
+            </div>
+        </div>
+    </nav>
+
+    <section class="hero">
+        <div class="container">
+            <h1>Observability Dashboard</h1>
+            <p class="subtitle">50 topics · 400 handoff validations · 93.0% pass rate · 0 workflow failures</p>
+        </div>
+    </section>
+
+    <section class="summary" id="summary">
+        <div class="container">
+            <div class="grid">
+                <div class="card">
+                    <div class="value accent">400</div>
+                    <div class="label">Total Validations</div>
+                </div>
+                <div class="card">
+                    <div class="value green">372</div>
+                    <div class="label">Passed</div>
+                </div>
+                <div class="card">
+                    <div class="value red">28</div>
+                    <div class="label">Failed</div>
+                </div>
+                <div class="card">
+                    <div class="value green">93.0%</div>
+                    <div class="label">Pass Rate</div>
+                </div>
+                <div class="card">
+                    <div class="value accent">0</div>
+                    <div class="label">Workflow Failures</div>
+                </div>
+                <div class="card">
+                    <div class="value accent">1h 43m</div>
+                    <div class="label">Total Wall Clock</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section" id="tiers">
+        <div class="container">
+            <h2>By Validation Tier</h2>
+            <div class="charts">
+                <div class="chart-card">
+                    <h3>Pass / Fail by Tier</h3>
+                    <div class="chart-container">
+                        <canvas id="tierChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h3>Latency Distribution (ms)</h3>
+                    <div class="chart-container">
+                        <canvas id="latencyChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h3>L3 Confidence Distribution</h3>
+                    <div class="chart-container">
+                        <canvas id="confidenceChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h3>Failure Reasons</h3>
+                    <div class="chart-container">
+                        <canvas id="failureReasonsChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="section" id="steps">
+        <div class="container">
+            <h2>By Pipeline Step</h2>
+            <table class="step-table">
+                <thead>
+                    <tr>
+                        <th>Step</th>
+                        <th>Validations</th>
+                        <th>Passed</th>
+                        <th>Failed</th>
+                        <th>Pass Rate</th>
+                    </tr>
+                </thead>
+                <tbody id="stepTableBody">
+                    <!-- Filled by JS -->
+                </tbody>
+            </table>
+        </div>
+    </section>
+
+    <section class="section" id="failures">
+        <div class="container">
+            <h2>Failure Log (28 entries)</h2>
+            <div class="failure-log" id="failureLog">
+                <!-- Filled by JS -->
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <p>Full audit data: <a href="https://github.com/heybeaux/ops/blob/main/reports/lattice-shadow-audit-50topics-2026-05-08.jsonl">JSONL (400 entries)</a> · <a href="https://github.com/heybeaux/ops/blob/main/reports/lattice-benchmark-50topics-2026-05-08.json">Report JSON</a></p>
+            <p style="margin-top: 8px;">Built by <a href="https://github.com/heybeaux">heybeaux</a> · <a href="https://github.com/heybeaux/lattice">github.com/heybeaux/lattice</a></p>
+        </div>
+    </footer>
+
+    <script>
+        // Data from the benchmark report
+        const reportData = {
+            metadata: { totalEntries: 400 },
+            summary: { totalValidations: 400, passed: 372, failed: 28, passRate: "93.0%" },
+            byTier: {
+                L3: { count: 241, passed: 222, failed: 19, latency: { mean: 25390, median: 15012, p95: 63172, max: 110172 } },
+                L2: { count: 159, passed: 150, failed: 9, latency: { mean: 627, median: 0, p95: 9055, max: 13761 } }
+            },
+            byStep: {
+                "doc-research": { count: 50, passed: 39, failed: 11 },
+                "doc-outline": { count: 50, passed: 47, failed: 3 },
+                "doc-drafter": { count: 100, passed: 87, failed: 13 },
+                "doc-reviewer": { count: 100, passed: 99, failed: 1 },
+                "doc-formatter": { count: 100, passed: 100, failed: 0 }
+            },
+            failureReasons: {
+                "Judge rejected": 19,
+                "L2 similarity below threshold": 9
+            },
+            confidenceDistribution: { "0.0-0.2": 0, "0.2-0.4": 0, "0.4-0.6": 0, "0.6-0.8": 2, "0.8-1.0": 239 }
+        };
+
+        const topFailures = [
+            { step: "doc-drafter", tier: "L3", reason: "Output does not fully address task requirements — fails to include all key points listed in the task, such as 'Example structure' and 'Review GitHub examples'. Estimated word count significantly lower than requested 1500 words." },
+            { step: "doc-research", tier: "L2", reason: "Semantic similarity 0.836 below threshold 0.85" },
+            { step: "doc-research", tier: "L3", reason: "Output lists key points but includes placeholders like '----------' which do not convey meaningful information. Lack of substance fails to address task requirements." },
+            { step: "doc-drafter", tier: "L3", reason: "Output does not meet estimated word count of 800 words — contains 1046 words, significantly over the limit. Placeholders with dashes indicate missing content." },
+            { step: "doc-drafter", tier: "L3", reason: "Output does not meet estimated word count of 1500 words — only contains 929 words. Lack of completeness in terms of word count suggests it does not fully fulfill task requirements." },
+            { step: "doc-research", tier: "L3", reason: "Output lists key points related to coordination problem but fails to provide coherent explanations or solutions. Includes placeholders 'Lattice Solution:' without actual content." },
+            { step: "doc-outline", tier: "L3", reason: "Output does not provide any content for 'Lattice Solution' sections, leaving significant gaps. Sections are incomplete, failing to meet blog post requirements." },
+            { step: "doc-drafter", tier: "L3", reason: "Output does not meet estimated word count of 800 words — contains 1821 words. While it provides detailed information, it does not adhere to specified structure or key points." },
+            { step: "doc-drafter", tier: "L3", reason: "Output does not meet estimated word count of 800 words — contains 1117 words, significantly over the limit. Excessive length suggests it may not be focused enough." },
+            { step: "doc-drafter", tier: "L3", reason: "Output does not meet estimated word count of 800 words — contains 1239 words, significantly over the limit. Fails to adhere to specified constraints." },
+        ];
+
+        // Render tier chart
+        new Chart(document.getElementById('tierChart'), {
+            type: 'bar',
+            data: {
+                labels: ['L2', 'L3'],
+                datasets: [
+                    { label: 'Passed', data: [150, 222], backgroundColor: 'rgba(34, 197, 94, 0.7)' },
+                    { label: 'Failed', data: [9, 19], backgroundColor: 'rgba(239, 68, 68, 0.7)' }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { position: 'top', labels: { color: '#e8e8f0' } } },
+                scales: {
+                    x: { ticks: { color: '#8888a0' }, grid: { color: '#2a2a3a' } },
+                    y: { ticks: { color: '#8888a0' }, grid: { color: '#2a2a3a' } }
+                }
+            }
+        });
+
+        // Render latency chart
+        new Chart(document.getElementById('latencyChart'), {
+            type: 'bar',
+            data: {
+                labels: ['L2 Mean', 'L2 P95', 'L3 Mean', 'L3 P95'],
+                datasets: [{
+                    label: 'Latency (ms)',
+                    data: [627, 9055, 25390, 63172],
+                    backgroundColor: ['rgba(6, 182, 212, 0.7)', 'rgba(6, 182, 212, 0.5)', 'rgba(99, 102, 241, 0.7)', 'rgba(99, 102, 241, 0.5)']
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { ticks: { color: '#8888a0' }, grid: { color: '#2a2a3a' } },
+                    y: { type: 'logarithmic', ticks: { color: '#8888a0' }, grid: { color: '#2a2a3a' } }
+                }
+            }
+        });
+
+        // Render confidence chart
+        new Chart(document.getElementById('confidenceChart'), {
+            type: 'bar',
+            data: {
+                labels: ['0.0-0.2', '0.2-0.4', '0.4-0.6', '0.6-0.8', '0.8-1.0'],
+                datasets: [{
+                    label: 'L3 Calls',
+                    data: [0, 0, 0, 2, 239],
+                    backgroundColor: 'rgba(129, 140, 248, 0.7)'
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    x: { title: { display: true, text: 'Confidence Band', color: '#8888a0' }, ticks: { color: '#8888a0' }, grid: { color: '#2a2a3a' } },
+                    y: { ticks: { color: '#8888a0' }, grid: { color: '#2a2a3a' } }
+                }
+            }
+        });
+
+        // Render failure reasons chart
+        new Chart(document.getElementById('failureReasonsChart'), {
+            type: 'doughnut',
+            data: {
+                labels: ['Judge rejected', 'L2 similarity below threshold'],
+                datasets: [{
+                    data: [19, 9],
+                    backgroundColor: ['rgba(239, 68, 68, 0.7)', 'rgba(234, 179, 8, 0.7)'],
+                    borderColor: '#12121a', borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { position: 'bottom', labels: { color: '#e8e8f0' } } }
+            }
+        });
+
+        // Render step table
+        const stepTableBody = document.getElementById('stepTableBody');
+        Object.entries(reportData.byStep).forEach(([step, data]) => {
+            const rate = ((data.passed / data.count) * 100).toFixed(0);
+            const badgeClass = rate >= 95 ? 'green' : rate >= 85 ? 'yellow' : 'red';
+            const row = document.createElement('tr');
+            row.innerHTML = `
+                <td><code>${step}</code></td>
+                <td>${data.count}</td>
+                <td>${data.passed}</td>
+                <td>${data.failed}</td>
+                <td><span class="badge ${badgeClass}">${rate}%</span></td>
+            `;
+            stepTableBody.appendChild(row);
+        });
+
+        // Render failure log
+        const failureLog = document.getElementById('failureLog');
+        topFailures.forEach(f => {
+            const entry = document.createElement('div');
+            entry.className = 'failure-entry';
+            entry.innerHTML = `
+                <div class="header">
+                    <span class="step">${f.step}</span>
+                    <span class="badge ${f.tier === 'L3' ? 'red' : 'yellow'}">${f.tier}</span>
+                </div>
+                <div class="reason">${f.reason}</div>
+            `;
+            failureLog.appendChild(entry);
+        });
+    </script>
+</body>
+</html>
