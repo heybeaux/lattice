@@ -39,6 +39,11 @@
   "peerDependencies": {
     "@mastra/core": ">=0.1.0"
   },
+  "peerDependenciesMeta": {
+    "@mastra/core": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "tsup": "^8.4.0",
