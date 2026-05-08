@@ -9,6 +9,17 @@ description = "Lattice State Contract coordination layer for CrewAI workflows"
 readme = "README.md"
 keywords = ["lattice", "crewai", "ai-agents", "coordination", "state-contract", "circuit-breaker"]
 license = { text = "MIT" }
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 requires-python = ">=3.10"
 dependencies = [
     "python-ulid>=2.0.0",
@@ -30,5 +41,9 @@ Documentation = "https://heybeaux.github.io/lattice/"
 Repository = "https://github.com/heybeaux/lattice/tree/main/packages/adapter-crewai"
 Issues = "https://github.com/heybeaux/lattice/issues"
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/lattice_crewai"]
+
