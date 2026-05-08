@@ -12,18 +12,31 @@ export type ValidationTier = 'L1' | 'L2' | 'L3';
  */
 export interface TieredCircuitBreakerConfig {
   /**
-   * Which validation tiers to enable.
-   * - 'L1' — structural validation only (default, zero deps)
+   * Validation mode.
+   *
+   * 'auto' (default): L1 runs on every handoff. L2 runs if an EmbeddingProvider
+   * is configured. L3 only runs if L2 similarity falls below l3EscalationThreshold
+   * OR the contract is marked as high-risk via metadata.isHighRisk.
+   *
+   * Explicit modes run the specified tiers on every handoff:
+   * - 'L1' — structural validation only
    * - 'L1+L2' — structural + embedding similarity
    * - 'L1+L3' — structural + LLM-as-judge
-   * - 'L1+L2+L3' — all tiers enabled
+   * - 'L1+L2+L3' — all tiers on every handoff (slowest, most thorough)
    */
-  tier?: 'L1' | 'L1+L2' | 'L1+L3' | 'L1+L2+L3';
+  tier?: 'auto' | 'L1' | 'L1+L2' | 'L1+L3' | 'L1+L2+L3';
 
-  /** Embedding similarity threshold for L2 (default: 0.7) */
+  /** Embedding similarity threshold for L2 pass/fail (default: 0.7) */
   l2Threshold?: number;
 
-  /** LLM-as-judge confidence threshold for L3 (default: 0.7) */
+  /**
+   * L2 similarity threshold below which L3 is triggered (auto mode only).
+   * If L2 similarity falls below this value, L3 LLM-as-judge runs as escalation.
+   * Default: 0.85
+   */
+  l3EscalationThreshold?: number;
+
+  /** LLM-as-judge confidence threshold for L3 pass/fail (default: 0.7) */
   l3ConfidenceThreshold?: number;
 
   /** Consecutive failures before opening the circuit (default: 3) */
@@ -51,7 +64,7 @@ export interface ValidationResult {
   durationMs: number;
   /** Failure reason (if failed) */
   reason?: string;
-  /** Confidence score (L3 only) */
+  /** Confidence score (L2 similarity or L3 judge confidence) */
   confidence?: number;
 }
 

@@ -73,3 +73,12 @@ export type { LatticeEvent, LatticeEventType, LatticeEventHandler } from './even
 // Redaction
 export { redactContract } from './events/redact.js';
 export type { RedactOptions, SensitivityLevel } from './events/redact.js';
+
+// ConsensusReducer
+export { ConsensusReducer } from './reducer/consensus.js';
+export type {
+  ConsensusReducerConfig,
+  ConflictStrategy,
+  ReduceResult,
+  Conflict,
+} from './reducer/consensus.js';
