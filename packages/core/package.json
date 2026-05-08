@@ -1,7 +1,7 @@
 {
   "name": "@heybeaux/lattice-core",
   "version": "0.1.0",
-  "description": "Coordination infrastructure for multi-agent AI systems — State Contracts and Circuit Breakers",
+  "description": "Coordination infrastructure for multi-agent AI systems \u2014 State Contracts and Circuit Breakers",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -21,7 +21,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src"
+    "lint": "eslint src",
+    "generate:types": "tsx scripts/generate-types.ts"
   },
   "keywords": [
     "ai",
@@ -45,6 +46,7 @@
   "devDependencies": {
     "@types/node": "^22.15.0",
     "eslint": "^9.27.0",
+    "json-schema-to-typescript": "^15.0.4",
     "tsup": "^8.4.0",
     "typescript": "^5.8.3",
     "vitest": "^3.1.3"
