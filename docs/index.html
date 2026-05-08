@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lattice — Coordination Infrastructure for Multi-Agent AI</title>
+    <meta name="description" content="Lattice provides State Contracts, Circuit Breakers, and Pipeline orchestration that make multi-agent AI systems reliable.">
+    <meta property="og:title" content="Lattice — Coordination Infrastructure for Multi-Agent AI">
+    <meta property="og:description" content="Like threading libraries for concurrent programming — but for AI agents.">
+    <meta property="og:type" content="website">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⬡</text></svg>">
+    <style>
+        *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: #0a0a0f;
+            --bg-card: #12121a;
+            --bg-code: #1a1a24;
+            --border: #2a2a3a;
+            --text: #e8e8f0;
+            --text-muted: #8888a0;
+            --accent: #6366f1;
+            --accent-light: #818cf8;
+            --green: #22c55e;
+            --red: #ef4444;
+            --yellow: #eab308;
+            --cyan: #06b6d4;
+            --mono: 'SF Mono', 'Fira Code', 'JetBrains Mono', monospace;
+            --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+
+        html { scroll-behavior: smooth; }
+
+        body {
+            font-family: var(--sans);
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+
+        /* ─── Nav ─── */
+        nav {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+            background: rgba(10, 10, 15, 0.85);
+            backdrop-filter: blur(12px);
+            border-bottom: 1px solid var(--border);
+        }
+        nav .container {
+            display: flex; align-items: center; justify-content: space-between;
+            height: 56px;
+        }
+        nav .logo { font-weight: 700; font-size: 1.1rem; letter-spacing: -0.02em; }
+        nav .logo span { color: var(--accent); }
+        nav .links { display: flex; gap: 24px; }
+        nav .links a {
+            color: var(--text-muted); text-decoration: none; font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+        nav .links a:hover { color: var(--text); }
+
+        /* ─── Hero ─── */
+        .hero {
+            padding: 160px 0 100px;
+            text-align: center;
+            border-bottom: 1px solid var(--border);
+        }
+        .hero h1 {
+            font-size: clamp(2.5rem, 6vw, 4rem);
+            font-weight: 800;
+            letter-spacing: -0.03em;
+            line-height: 1.1;
+            margin-bottom: 20px;
+        }
+        .hero h1 .accent { color: var(--accent-light); }
+        .hero .subtitle {
+            font-size: clamp(1.1rem, 2vw, 1.35rem);
+            color: var(--text-muted);
+            max-width: 650px;
+            margin: 0 auto 32px;
+        }
+        .hero .install {
+            display: inline-flex; align-items: center; gap: 12px;
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 14px 24px;
+            font-family: var(--mono);
+            font-size: 0.95rem;
+        }
+        .hero .install .prompt { color: var(--accent); }
+        .hero .install code { color: var(--text); }
+        .hero .install .copy {
+            background: none; border: none; color: var(--text-muted);
+            cursor: pointer; font-size: 0.85rem; padding: 4px 8px;
+            border-radius: 4px; transition: all 0.2s;
+        }
+        .hero .install .copy:hover { background: var(--border); color: var(--text); }
+        .hero .badges {
+            display: flex; justify-content: center; gap: 16px;
+            margin-top: 24px; flex-wrap: wrap;
+        }
+        .hero .badges a {
+            color: var(--text-muted); text-decoration: none; font-size: 0.85rem;
+            border: 1px solid var(--border); border-radius: 6px;
+            padding: 6px 14px; transition: all 0.2s;
+        }
+        .hero .badges a:hover { border-color: var(--accent); color: var(--accent-light); }
+
+        /* ─── Stats ─── */
+        .stats {
+            padding: 60px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .stats .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 32px;
+            text-align: center;
+        }
+        .stats .stat h3 {
+            font-size: 2.5rem; font-weight: 800; color: var(--accent-light);
+            letter-spacing: -0.02em;
+        }
+        .stats .stat p { color: var(--text-muted); margin-top: 4px; font-size: 0.95rem; }
+
+        /* ─── Problem ─── */
+        .problem {
+            padding: 80px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .problem h2 {
+            font-size: 2rem; font-weight: 700; margin-bottom: 16px;
+            letter-spacing: -0.02em;
+        }
+        .problem p { color: var(--text-muted); max-width: 700px; font-size: 1.05rem; margin-bottom: 32px; }
+        .problem .failures {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+        }
+        .problem .failure {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 20px 24px;
+        }
+        .problem .failure .pct {
+            font-size: 1.8rem; font-weight: 800; color: var(--red);
+        }
+        .problem .failure .label {
+            color: var(--text-muted); font-size: 0.9rem; margin-top: 4px;
+        }
+
+        /* ─── Solution ─── */
+        .solution {
+            padding: 80px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .solution h2 {
+            font-size: 2rem; font-weight: 700; margin-bottom: 16px;
+            letter-spacing: -0.02em;
+        }
+        .solution > .container > p {
+            color: var(--text-muted); max-width: 700px; font-size: 1.05rem; margin-bottom: 40px;
+        }
+        .primitives {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+        }
+        .primitive {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 24px;
+            transition: border-color 0.2s;
+        }
+        .primitive:hover { border-color: var(--accent); }
+        .primitive h3 {
+            font-size: 1.1rem; font-weight: 600; margin-bottom: 8px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .primitive h3 .icon { color: var(--accent); }
+        .primitive p { color: var(--text-muted); font-size: 0.9rem; }
+
+        /* ─── Code ─── */
+        .code-section {
+            padding: 80px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .code-section h2 {
+            font-size: 2rem; font-weight: 700; margin-bottom: 16px;
+            letter-spacing: -0.02em;
+        }
+        .code-section > .container > p {
+            color: var(--text-muted); max-width: 700px; font-size: 1.05rem; margin-bottom: 32px;
+        }
+        .code-block {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow: hidden;
+            margin-bottom: 24px;
+        }
+        .code-block .header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 16px;
+            background: rgba(255,255,255,0.03);
+            border-bottom: 1px solid var(--border);
+            font-size: 0.8rem; color: var(--text-muted);
+        }
+        .code-block pre {
+            padding: 20px;
+            overflow-x: auto;
+            font-family: var(--mono);
+            font-size: 0.85rem;
+            line-height: 1.7;
+            color: var(--text);
+        }
+        .code-block .comment { color: #555570; }
+        .code-block .keyword { color: var(--accent-light); }
+        .code-block .string { color: var(--green); }
+        .code-block .fn { color: var(--cyan); }
+        .code-block .type { color: var(--yellow); }
+
+        /* ─── Benchmark ─── */
+        .benchmark {
+            padding: 80px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .benchmark h2 {
+            font-size: 2rem; font-weight: 700; margin-bottom: 16px;
+            letter-spacing: -0.02em;
+        }
+        .benchmark > .container > p {
+            color: var(--text-muted); max-width: 700px; font-size: 1.05rem; margin-bottom: 40px;
+        }
+        .benchmark-results {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 24px;
+            font-family: var(--mono);
+            font-size: 0.8rem;
+            line-height: 1.8;
+            overflow-x: auto;
+        }
+        .benchmark-results .pass { color: var(--green); }
+        .benchmark-results .skip { color: var(--yellow); }
+        .benchmark-results .dim { color: #555570; }
+
+        /* ─── Packages ─── */
+        .packages {
+            padding: 80px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        .packages h2 {
+            font-size: 2rem; font-weight: 700; margin-bottom: 16px;
+            letter-spacing: -0.02em;
+        }
+        .packages > .container > p {
+            color: var(--text-muted); max-width: 700px; font-size: 1.05rem; margin-bottom: 40px;
+        }
+        .pkg-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+        }
+        .pkg {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 24px;
+        }
+        .pkg .name {
+            font-family: var(--mono);
+            font-size: 0.9rem;
+            color: var(--accent-light);
+            margin-bottom: 8px;
+        }
+        .pkg .desc {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-bottom: 16px;
+        }
+        .pkg a {
+            color: var(--text);
+            font-size: 0.85rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 14px;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+        .pkg a:hover { border-color: var(--accent); }
+
+        /* ─── CTA ─── */
+        .cta {
+            padding: 80px 0;
+            text-align: center;
+        }
+        .cta h2 {
+            font-size: 2rem; font-weight: 700; margin-bottom: 16px;
+            letter-spacing: -0.02em;
+        }
+        .cta p {
+            color: var(--text-muted); max-width: 500px; margin: 0 auto 32px;
+            font-size: 1.05rem;
+        }
+        .cta .buttons {
+            display: flex; justify-content: center; gap: 16px; flex-wrap: wrap;
+        }
+        .cta .btn {
+            display: inline-flex; align-items: center; gap: 8px;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+        .cta .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+        .cta .btn-primary:hover { background: var(--accent-light); }
+        .cta .btn-secondary {
+            border: 1px solid var(--border);
+            color: var(--text);
+        }
+        .cta .btn-secondary:hover { border-color: var(--accent); }
+
+        /* ─── Footer ─── */
+        footer {
+            border-top: 1px solid var(--border);
+            padding: 32px 0;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+        }
+        footer a { color: var(--text-muted); text-decoration: none; }
+        footer a:hover { color: var(--accent-light); }
+
+        @media (max-width: 640px) {
+            .hero { padding: 120px 0 60px; }
+            nav .links { gap: 16px; }
+            .stats .grid { grid-template-columns: repeat(2, 1fr); }
+        }
+    </style>
+</head>
+<body>
+
+<nav>
+    <div class="container">
+        <div class="logo">lattice<span>.</span></div>
+        <div class="links">
+            <a href="#primitives">Primitives</a>
+            <a href="#benchmark">Benchmark</a>
+            <a href="https://github.com/heybeaux/lattice">GitHub</a>
+        </div>
+    </div>
+</nav>
+
+<section class="hero">
+    <div class="container">
+        <h1>Coordination infrastructure<br>for <span class="accent">multi-agent AI</span></h1>
+        <p class="subtitle">
+            Like threading libraries for concurrent programming — but for AI agents.
+            State Contracts, Circuit Breakers, and Pipeline orchestration that make multi-agent systems reliable.
+        </p>
+        <div class="install">
+            <span class="prompt">$</span>
+            <code>npm install @heybeaux/lattice-core</code>
+            <button class="copy" onclick="navigator.clipboard.writeText('npm install @heybeaux/lattice-core'); this.textContent='copied'; setTimeout(()=>this.textContent='copy', 2000)">copy</button>
+        </div>
+        <div class="badges">
+            <a href="https://www.npmjs.com/package/@heybeaux/lattice-core">npm</a>
+            <a href="https://github.com/heybeaux/lattice">GitHub</a>
+            <a href="https://github.com/heybeaux/lattice/tree/main/examples/quick-start/demo.ts">Demo</a>
+            <a href="https://github.com/heybeaux/lattice/tree/main/benchmark">Benchmark</a>
+        </div>
+    </div>
+</section>
+
+<section class="stats">
+    <div class="container">
+        <div class="grid">
+            <div class="stat">
+                <h3>86</h3>
+                <p>Tests passing</p>
+            </div>
+            <div class="stat">
+                <h3>75%</h3>
+                <p>Fault detection (L1+L3)</p>
+            </div>
+            <div class="stat">
+                <h3>52ms</h3>
+                <p>Avg detection time</p>
+            </div>
+            <div class="stat">
+                <h3>29KB</h3>
+                <p>Bundle size (minified)</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="problem" id="problem">
+    <div class="container">
+        <h2>The Problem</h2>
+        <p>Multi-agent AI systems fail at alarming rates — not because the models are bad, but because there's no infrastructure for coordination.</p>
+        <div class="failures">
+            <div class="failure">
+                <div class="pct">41–87%</div>
+                <div class="label">Failure rates across multi-agent frameworks<br><span class="dim">(UC Berkeley MAST, 1,600+ traces)</span></div>
+            </div>
+            <div class="failure">
+                <div class="pct">40%</div>
+                <div class="label">Of agentic AI projects predicted cancelled by 2027<br><span class="dim">(Gartner, 2026)</span></div>
+            </div>
+            <div class="failure">
+                <div class="pct">15%</div>
+                <div class="label">Of enterprises prepared for agentic AI in production<br><span class="dim">(Fivetran Readiness Index, May 2026)</span></div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="solution" id="primitives">
+    <div class="container">
+        <h2>The Primitives</h2>
+        <p>Lattice provides the coordination primitives that make multi-agent systems reliable. Structural solutions for structural problems.</p>
+        <div class="primitives">
+            <div class="primitive">
+                <h3><span class="icon">◇</span> State Contracts</h3>
+                <p>Typed envelopes that travel between every agent handoff — carrying inputs, decisions, outputs, constraints, and assumptions. Full lineage for every action.</p>
+            </div>
+            <div class="primitive">
+                <h3><span class="icon">⚡</span> Circuit Breakers</h3>
+                <p>Tiered validation: L1 (structural), L2 (semantic similarity), L3 (LLM-as-judge). Catches failures before they cascade downstream.</p>
+            </div>
+            <div class="primitive">
+                <h3><span class="icon">⬡</span> Pipeline Builder</h3>
+                <p>Compose sequential agent handoffs with built-in coordination. Abort, retry, or degrade on failure — your choice.</p>
+            </div>
+            <div class="primitive">
+                <h3><span class="icon">⊘</span> Redaction</h3>
+                <p>Automatic PII scrubbing before logging. API keys, tokens, emails, phone numbers — cleaned while preserving audit structure.</p>
+            </div>
+            <div class="primitive">
+                <h3><span class="icon">◎</span> EventEmitter</h3>
+                <p>Typed coordination events for every contract emission, validation, and circuit state change. Hook into your monitoring stack.</p>
+            </div>
+            <div class="primitive">
+                <h3><span class="icon">⊞</span> wrapAgent()</h3>
+                <p>Wrap any agent function — sync or async — to get State Contracts and validation for free. No framework changes needed.</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="code-section">
+    <div class="container">
+        <h2>How It Works</h2>
+        <p>Three lines to wrap an agent. Full coordination from there.</p>
+        <div class="code-block">
+            <div class="header">
+                <span>pipeline.ts</span>
+                <span>TypeScript</span>
+            </div>
+<pre><span class="keyword">import</span> { pipeline, HandoffFailure } <span class="keyword">from</span> <span class="string">'@heybeaux/lattice-core'</span>;
+
+<span class="keyword">const</span> p = <span class="fn">pipeline</span>()
+  .<span class="fn">agent</span>(<span class="string">'researcher'</span>, researchFn, { breaker: { tier: <span class="string">'L1+L3'</span> } })
+  .<span class="fn">agent</span>(<span class="string">'writer'</span>, writeFn, { breaker: { tier: <span class="string">'L1'</span> } })
+  .<span class="fn">agent</span>(<span class="string">'editor'</span>, editFn, { breaker: { tier: <span class="string">'L1'</span> } })
+  .<span class="fn">onReject</span>(<span class="string">'retry'</span>, { maxRetries: <span class="type">2</span> })
+  .<span class="fn">build</span>();
+
+<span class="keyword">try</span> {
+  <span class="keyword">const</span> result = <span class="keyword">await</span> p.<span class="fn">execute</span>({ query: <span class="string">'AI coordination'</span> });
+  console.<span class="fn">log</span>(result.output);       <span class="comment">// final editor output</span>
+  console.<span class="fn">log</span>(result.contracts);    <span class="comment">// State Contracts from each agent</span>
+  console.<span class="fn">log</span>(result.hadRejected);  <span class="comment">// any rejections?</span>
+} <span class="keyword">catch</span> (err) {
+  <span class="keyword">if</span> (err <span class="keyword">instanceof</span> HandoffFailure) {
+    console.<span class="fn">error</span>(err.validation.reason);  <span class="comment">// why it failed</span>
+    console.<span class="fn">error</span>(err.contract);           <span class="comment">// full audit trail</span>
+  }
+}</pre>
+        </div>
+    </div>
+</section>
+
+<section class="benchmark" id="benchmark">
+    <div class="container">
+        <h2>Benchmark Results</h2>
+        <p>16 fault scenarios across a 4-agent research pipeline. No API keys needed.</p>
+        <div class="benchmark-results">
+<span class="dim">═══ Results ═══</span>
+
+<span class="pass">✅ agent_throws</span>          [L1] Agent threw exception
+<span class="pass">✅ agent_throws_extract</span>  [L1] Agent threw exception
+<span class="pass">✅ agent_throws_validate</span> [L1] Agent threw exception
+<span class="pass">✅ api_key_leak_summarize</span> [redaction]
+<span class="pass">✅ api_key_leak_extract</span>   [redaction]
+<span class="pass">✅ api_key_leak_format</span>    [redaction]
+
+<span class="skip">⚪ hallucination_summary</span>    (needs L3)
+<span class="skip">⚪ hallucination_citations</span>  (needs L3)
+<span class="skip">⚪ hallucination_conclusion</span> (needs L3)
+<span class="skip">⚪ hallucination_data</span>       (needs L3)
+<span class="skip">⚪ empty_output</span>             (needs L3)
+<span class="skip">⚪ missing_field</span>            (needs L3)
+<span class="skip">⚪ wrong_shape</span>              (valid contract, bad content)
+<span class="skip">⚪ null_output</span>              (valid contract, bad content)
+<span class="skip">⚪ extra_field</span>              (valid contract, bad content)
+<span class="skip">⚪ wrong_type</span>               (valid contract, bad content)
+
+<span class="dim">L1 detection:  100% (structural)</span>
+<span class="dim">Redaction:     100% (PII/secret scrubbing)</span>
+<span class="dim">Projected L1+L3: 75%</span>
+        </div>
+    </div>
+</section>
+
+<section class="packages">
+    <div class="container">
+        <h2>Packages</h2>
+        <p>Three packages, one ecosystem. Start with core, add providers and adapters as needed.</p>
+        <div class="pkg-grid">
+            <div class="pkg">
+                <div class="name">@heybeaux/lattice-core</div>
+                <div class="desc">State Contracts, Circuit Breakers, Pipeline builder, EventEmitter, Redaction. The foundation.</div>
+                <a href="https://www.npmjs.com/package/@heybeaux/lattice-core">npm →</a>
+            </div>
+            <div class="pkg">
+                <div class="name">@heybeaux/lattice-provider-openai</div>
+                <div class="desc">L2 embeddings via text-embedding-3-small. L3 LLM-as-judge via gpt-4o-mini. Out of the box.</div>
+                <a href="https://www.npmjs.com/package/@heybeaux/lattice-provider-openai">npm →</a>
+            </div>
+            <div class="pkg">
+                <div class="name">@heybeaux/lattice-adapter-mastra</div>
+                <div class="desc">Wrap Mastra workflow steps with Lattice coordination. Bridge to the heybeaux/Forge ecosystem.</div>
+                <a href="https://github.com/heybeaux/lattice/tree/main/packages/adapter-mastra">GitHub →</a>
+            </div>
+        </div>
+    </div>
+</section>
+
+<section class="cta">
+    <div class="container">
+        <h2>Build reliable agent systems</h2>
+        <p>Install Lattice, wrap your agents, and see failures before they cascade.</p>
+        <div class="buttons">
+            <a href="https://github.com/heybeaux/lattice" class="btn btn-primary">Get Started →</a>
+            <a href="https://github.com/heybeaux/lattice/blob/main/THESIS.md" class="btn btn-secondary">Read the Thesis</a>
+        </div>
+    </div>
+</section>
+
+<footer>
+    <div class="container">
+        <p>Built by the <a href="https://github.com/heybeaux">heybeaux</a> team. MIT License.</p>
+    </div>
+</footer>
+
+</body>
+</html>
