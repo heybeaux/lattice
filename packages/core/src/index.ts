@@ -89,3 +89,10 @@ export type {
   ReduceResult,
   Conflict,
 } from './reducer/consensus.js';
+
+// Compliance
+export { ComplianceAuditLog, GENESIS_HASH } from './compliance/audit-log.js';
+export type {
+  ComplianceConfig,
+  AuditLogEntry,
+} from './compliance/audit-log.js';
