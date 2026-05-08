@@ -104,7 +104,7 @@ describe('createOpenAIJudgeProvider', () => {
 // ─── Integration with Lattice Core ───
 
 describe('Provider integration with TieredCircuitBreaker', async () => {
-  const { TieredCircuitBreaker, createContract } = await import('@heybeaux/lattice-core');
+  const { TieredCircuitBreaker, createContract } = await import('../../core/src/index.js');
 
   it('accepts the OpenAI embedding provider', () => {
     const provider = createOpenAIEmbeddingProvider({ apiKey: 'sk-test' });
