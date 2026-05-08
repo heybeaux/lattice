@@ -15,7 +15,7 @@ import {
   redactContract,
   globalEmitter,
 } from '@heybeaux/lattice-core';
-import { createOpenAIJudgeProvider } from '@heybeaux/lattice-provider-openai';
+import { createOpenAIJudgeProvider, createOpenAIEmbeddingProvider } from '@heybeaux/lattice-provider-openai';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -100,8 +100,15 @@ export function createShadowStep<TInput, TOutput>(
     onReject: blockOnFailure ? 'abort' : 'degrade',
   });
 
+  // Inject L2 embedding provider if L2 or L3 is enabled
+  if (tier.includes('L2') || tier.includes('L3') || tier === 'auto') {
+    breaker.setEmbeddingProvider(createOpenAIEmbeddingProvider({
+      apiKey: config.openaiApiKey,
+    }));
+  }
+
   // Inject L3 judge if L3 is enabled
-  if (tier.includes('L3')) {
+  if (tier.includes('L3') || tier === 'auto') {
     breaker.setJudgeProvider(createOpenAIJudgeProvider({
       apiKey: config.openaiApiKey,
       model: 'gpt-4o-mini',
