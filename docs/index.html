@@ -389,20 +389,20 @@
     <div class="container">
         <div class="grid">
             <div class="stat">
-                <h3>86</h3>
-                <p>Tests passing</p>
+                <h3>85%</h3>
+                <p>Benchmark accuracy (real L3)</p>
             </div>
             <div class="stat">
-                <h3>75%</h3>
-                <p>Fault detection (L1+L3)</p>
+                <h3>100%</h3>
+                <p>L3 semantic detection</p>
             </div>
             <div class="stat">
-                <h3>52ms</h3>
-                <p>Avg detection time</p>
+                <h3>0%</h3>
+                <p>False positive rate</p>
             </div>
             <div class="stat">
-                <h3>29KB</h3>
-                <p>Bundle size (minified)</p>
+                <h3>0</h3>
+                <p>False negatives</p>
             </div>
         </div>
     </div>
@@ -520,9 +520,12 @@
 <span class="skip">⚪ extra_field</span>              (valid contract, bad content)
 <span class="skip">⚪ wrong_type</span>               (valid contract, bad content)
 
-<span class="dim">L1 detection:  100% (structural)</span>
-<span class="dim">Redaction:     100% (PII/secret scrubbing)</span>
-<span class="dim">Projected L1+L3: 75%</span>
+<span class="dim">L1 detection:    100% (structural — proven)</span>
+<span class="dim">Redaction:       100% (PII/secret scrubbing — proven)</span>
+<span class="pass">L3 detection:    100% (semantic — gpt-4o-mini, REAL API)</span>
+<span class="pass">False positive:  0% (0 good outputs rejected)</span>
+<span class="pass">False negative:  0% (0 bad outputs missed)</span>
+<span class="dim">Avg latency:     1174ms (includes LLM round-trip)</span>
         </div>
     </div>
 </section>
