@@ -34,8 +34,8 @@ export class TieredCircuitBreaker {
 
   private readonly schemaValidator: SchemaValidator;
   private readonly breaker: CircuitBreaker;
-  private readonly embeddingProvider?: EmbeddingProvider;
-  private readonly judgeProvider?: JudgeProvider;
+  private embeddingProvider?: EmbeddingProvider;
+  private judgeProvider?: JudgeProvider;
 
   constructor(config?: TieredCircuitBreakerConfig) {
     this.config = {

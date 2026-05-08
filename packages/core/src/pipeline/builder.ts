@@ -191,20 +191,20 @@ export class PipelineExecutor<TIn, TOut> {
               break;
 
             case 'retry': {
-              let lastError = error;
+              let retryError: HandoffFailure | null = error;
               for (let r = 0; r < this.maxRetries; r++) {
                 try {
                   const retryContract = await wrapped(currentInput as any, contracts[0]?.traceId);
                   contracts.push(retryContract);
                   currentInput = retryContract.outputs.payload;
-                  lastError = null;
+                  retryError = null;
                   break;
                 } catch (retryErr) {
-                  lastError = retryErr as HandoffFailure;
+                  retryError = retryErr as HandoffFailure;
                 }
               }
-              if (lastError) {
-                throw lastError;
+              if (retryError) {
+                throw retryError;
               }
               break;
             }
