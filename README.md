@@ -15,10 +15,10 @@ Multi-agent AI systems fail at high rates due to **structural coordination failu
 
 | Package | Version | Status | Notes |
 |---------|---------|--------|-------|
-| `@heybeaux/lattice-core` | v0.1.0 | ✅ Published | State Contracts, Circuit Breakers, Pipeline, Redaction, Events, ConsensusReducer |
+| `@heybeaux/lattice-core` | v0.1.0 | ✅ Published | State Contracts, Circuit Breakers, Pipeline, Redaction, Events, ConsensusReducer, parallel()/join() |
 | `@heybeaux/lattice-provider-openai` | v0.1.0 | ✅ Published | L2 embeddings + L3 LLM-as-judge via OpenAI |
-| `lattice-langgraph` | — | ✅ Merged | Python package — wrap_node() + LatticeMiddleware, 13 tests |
-| `@heybeaux/lattice-adapter-mastra` | v0.1.0 | 🚧 Built, not published | Mastra step wrapper — needs peer dep cleanup |
+| `@heybeaux/lattice-adapter-mastra` | v0.1.0 | ✅ Published | wrapMastraStep() + createLatticePipeline() |
+| `lattice-langgraph` | — | ✅ Merged | Python — wrap_node() + LatticeMiddleware, 13 tests |
 
 ## Real Benchmark Results (May 8, 2026)
 
@@ -122,11 +122,11 @@ try {
 | 🔥 | Forge integration (real traces benchmark) | In progress — Rook running 50 topics |
 | ✅ | LangGraph adapter (Python) | **Merged** — wrap_node() + LatticeMiddleware, 13 tests |
 | ✅ | ConsensusReducer (Silo-Bench synthesis fix) | **Built** — majority vote, conflict flagging |
-| 🔥 | `parallel()` + `join()` combinators | Not started — fan-out/fan-in for DAGs |
-|  | adapter-mastra npm publish | Built, needs peer dep cleanup |
-| 🟡 | L2 embedding benchmark | Provider exists, no real data |
-| 🟡 | JSON Schema IDL (canonical cross-language) | Not started |
-| 🟢 | Dashboard / observability UI | Not started |
+| ✅ | `parallel()` + `join()` combinators | **Built** — fan-out/fan-in for DAGs |
+| ✅ | JSON Schema IDL (canonical cross-language) | **Built** — generate:types script |
+| ✅ | adapter-mastra npm publish | **Published** — optional peer dep |
+| 🟡 | L2 real benchmark with Forge data | Waiting on Rook's run |
+| 🟢 | Observability dashboard | Not started |
 
 ## Ecosystem
 
