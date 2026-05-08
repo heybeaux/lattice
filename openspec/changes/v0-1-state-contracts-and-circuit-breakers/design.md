@@ -6,7 +6,7 @@
 
 ```
 packages/
-├── core/              # @lattice/core — zero external dependencies
+├── core/              # @heybeaux/lattice-core — zero external dependencies
 │   ├── src/
 │   │   ├── contract.ts        # StateContract type + factory
 │   │   ├── schema/            # JSON Schema definitions

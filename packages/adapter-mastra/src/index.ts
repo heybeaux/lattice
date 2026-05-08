@@ -1,5 +1,5 @@
 /**
- * @lattice/adapter-mastra — Wrap Mastra workflow steps with Lattice coordination.
+ * @heybeaux/lattice-adapter-mastra — Wrap Mastra workflow steps with Lattice coordination.
  *
  * Provides:
  * - `wrapMastraStep()` — wraps a Mastra step config to produce State Contracts
@@ -14,12 +14,12 @@ import {
   redactContract,
   EventEmitter,
   globalEmitter,
-} from '@lattice/core';
+} from '@heybeaux/lattice-core';
 import type {
   TieredCircuitBreakerConfig,
   StateContract,
   TieredValidationResult as ValidationResult,
-} from '@lattice/core';
+} from '@heybeaux/lattice-core';
 import type { z } from 'zod';
 
 /**

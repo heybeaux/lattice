@@ -38,7 +38,7 @@ Lattice v0.1 introduces two primitives that solve these specific problems:
 - Parallel/DAG pipeline execution (v0.2) — v0.1 is sequential-only; schema includes `parentIds: string[]` for forward compatibility
 - Streaming output validation (v0.2)
 - Networked/remote coordination (v1.0)
-- Framework adapters (LangGraph, AutoGen, CrewAI) — these will be separate `@lattice/adapter-*` packages
+- Framework adapters (LangGraph, AutoGen, CrewAI) — these will be separate `@heybeaux/lattice-adapter-*` packages
 
 ## Approach
 

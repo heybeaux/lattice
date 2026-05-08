@@ -1,5 +1,5 @@
 /**
- * @lattice/core — Coordination infrastructure for multi-agent AI systems.
+ * @heybeaux/lattice-core — Coordination infrastructure for multi-agent AI systems.
  *
  * Lattice provides State Contracts and Circuit Breakers that make multi-agent
  * systems reliable by solving structural coordination failures.

@@ -1,8 +1,8 @@
-# @lattice/core
+# @heybeaux/lattice-core
 
 **Coordination infrastructure for multi-agent AI systems.**
 
-[![npm](https://img.shields.io/npm/v/@lattice/core.svg)](https://www.npmjs.com/package/@lattice/core)
+[![npm](https://img.shields.io/npm/v/@heybeaux/lattice-core.svg)](https://www.npmjs.com/package/@heybeaux/lattice-core)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 > Like threading libraries for concurrent programming — but for AI agents.
@@ -12,7 +12,7 @@ Multi-agent AI systems fail at high rates due to **structural coordination failu
 ## Quick Start
 
 ```bash
-npm install @lattice/core
+npm install @heybeaux/lattice-core
 ```
 
 ### State Contracts
@@ -20,7 +20,7 @@ npm install @lattice/core
 Every agent handoff produces a State Contract — a typed envelope carrying full lineage:
 
 ```typescript
-import { createContract, validateContract } from '@lattice/core';
+import { createContract, validateContract } from '@heybeaux/lattice-core';
 
 const contract = createContract({
   fromAgent: 'researcher',
@@ -41,7 +41,7 @@ console.log(result.valid); // true
 Wrap any agent function to get coordination for free:
 
 ```typescript
-import { wrapAgent, HandoffFailure } from '@lattice/core';
+import { wrapAgent, HandoffFailure } from '@heybeaux/lattice-core';
 
 const researcher = wrapAgent(
   async (input: { query: string }) => {
@@ -69,7 +69,7 @@ try {
 Compose sequential agent handoffs with automatic coordination:
 
 ```typescript
-import { pipeline, HandoffFailure } from '@lattice/core';
+import { pipeline, HandoffFailure } from '@heybeaux/lattice-core';
 
 const pipeline_ = pipeline()
   .agent('researcher', researchFn, { breaker: { tier: 'L1+L3' } })
@@ -98,7 +98,7 @@ const traceId = result.contracts[0].traceId;
 | **L3** | LLM-as-judge | 1-3s | User-injected `JudgeProvider` |
 
 ```typescript
-import { TieredCircuitBreaker } from '@lattice/core';
+import { TieredCircuitBreaker } from '@heybeaux/lattice-core';
 
 const breaker = new TieredCircuitBreaker({
   tier: 'L1+L3',

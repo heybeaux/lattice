@@ -152,8 +152,8 @@ Instrument production Forge runs with Lattice. Collect State Contracts from ever
 1. **Add Lattice as a dependency to Forge**
    ```bash
    cd /Users/clawdbot/forge
-   npm install @lattice/core@latest
-   npm install @lattice/adapter-mastra@latest
+   npm install @heybeaux/lattice-core@latest
+   npm install @heybeaux/lattice-adapter-mastra@latest
    ```
 
 2. **Wrap the LinkedIn pipeline steps** (see above configs)

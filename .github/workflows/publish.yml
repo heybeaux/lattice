@@ -36,7 +36,7 @@ jobs:
       - name: Test
         run: pnpm test
 
-      - name: Publish @lattice/core
+      - name: Publish @heybeaux/lattice-core
         run: cd packages/core && pnpm publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

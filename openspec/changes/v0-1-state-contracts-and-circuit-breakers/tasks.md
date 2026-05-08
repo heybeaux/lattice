@@ -2,10 +2,10 @@
 
 ## 1. Project Setup
 - [ ] 1.1 Initialize TypeScript monorepo with pnpm workspaces
-- [ ] 1.2 Configure `@lattice/core` package (package.json, tsconfig, vitest, tsup)
+- [ ] 1.2 Configure `@heybeaux/lattice-core` package (package.json, tsconfig, vitest, tsup)
 - [ ] 1.3 Set up ESLint + Prettier + commit lint
 - [ ] 1.4 Add JSON Schema for State Contract (`schema/contract.schema.json`)
-- [ ] 1.5 Publish initial package to npm (scoped: `@lattice/core`)
+- [ ] 1.5 Publish initial package to npm (scoped: `@heybeaux/lattice-core`)
 
 ## 2. State Contract
 - [ ] 2.1 Define TypeScript types for full State Contract envelope
