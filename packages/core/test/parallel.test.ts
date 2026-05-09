@@ -30,7 +30,88 @@ describe('parallel()', () => {
       'first',
     );
 
-    expect(result.output).toEqual({ result: 6 });
+    // Both branches succeed concurrently — `result` is the first to resolve.
+    // We assert that it is a real success payload (not a default), and that
+    // the call records both succeeded.
+    expect([{ result: 6 }, { result: 7 }]).toContainEqual(result.output);
+    expect(result.succeeded).toBe(2);
+  });
+
+  // Issue #10 / H6: 'first' must return the first SUCCESSFUL branch even
+  // when an earlier-positioned branch fails. Prior behavior returned the
+  // index-0 payload (i.e., the failure) and silently discarded later
+  // successes. This test guards against regression.
+  it('"first" returns the successful branch when an earlier-positioned branch fails (#10)', async () => {
+    const result = await parallel(
+      [
+        // Branch a fails fast — it must NOT be the chosen output.
+        { id: 'a', fn: async () => { throw new Error('boom'); } },
+        { id: 'b', fn: async () => ({ ok: true, from: 'b' }) },
+      ],
+      {},
+      'first',
+    );
+
+    expect(result.output).toEqual({ ok: true, from: 'b' });
+    expect(result.failed).toBe(1);
+    expect(result.succeeded).toBe(1);
+  });
+
+  it('"first" prefers the temporally earliest fulfillment when multiple branches succeed', async () => {
+    const result = await parallel(
+      [
+        // Slow branch — would be picked by 'first-position' but not by 'first'.
+        {
+          id: 'slow',
+          fn: async () => {
+            await new Promise((r) => setTimeout(r, 50));
+            return { from: 'slow' };
+          },
+        },
+        // Fast branch wins the race.
+        { id: 'fast', fn: async () => ({ from: 'fast' }) },
+      ],
+      {},
+      'first',
+    );
+
+    expect(result.output).toEqual({ from: 'fast' });
+    expect(result.succeeded).toBe(2);
+  });
+
+  it('"first" surfaces failure payload only when ALL branches fail', async () => {
+    const result = await parallel(
+      [
+        { id: 'a', fn: async () => { throw new Error('a'); } },
+        { id: 'b', fn: async () => { throw new Error('b'); } },
+      ],
+      {},
+      'first',
+    );
+
+    expect(result.allCompleted).toBe(false);
+    expect(result.succeeded).toBe(0);
+    expect(result.failed).toBe(2);
+  });
+
+  // 'first-position' preserves the legacy index-0-wins semantics for callers
+  // that genuinely want positional behavior. Documented as an explicit opt-in.
+  it('"first-position" returns the index-0 branch even when it failed', async () => {
+    const result = await parallel(
+      [
+        { id: 'a', fn: async (): Promise<{ ok: boolean }> => { throw new Error('a-failed'); } },
+        { id: 'b', fn: async () => ({ ok: true }) },
+      ],
+      {},
+      'first-position',
+    );
+
+    // Index-0 branch failed — its HandoffFailure-attached contract carries
+    // `null` payload, so the join surfaces that null. Caller is responsible
+    // for inspecting `succeeded`/`failed`.
+    expect(result.output).toBeNull();
+    expect(result.failed).toBe(1);
+    expect(result.succeeded).toBe(1);
   });
 
   it('returns majority output with "majority" strategy', async () => {

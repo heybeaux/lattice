@@ -20,8 +20,18 @@ export interface ParallelBranch<TIn = unknown, TOut = unknown> {
 
 /**
  * Strategy for joining parallel branch outputs.
+ *
+ * - `'all'` — return all outputs as an array (default)
+ * - `'first'` — return the FIRST SUCCESSFUL output. Branches race; the first
+ *   fulfilled wrapped-agent contract wins. The strategy only fails if every
+ *   branch fails. (BREAKING in v0.3: prior to this change `'first'` returned
+ *   the branch at index 0 regardless of success — see issue #10.)
+ * - `'first-position'` — preserves the legacy `'first'` semantics: returns
+ *   the output at index 0 of `branches`, even when that branch failed and
+ *   later branches succeeded. Use only for deterministic-position semantics.
+ * - `'majority'` — most common output by canonical-equality vote.
  */
-export type JoinStrategy = 'first' | 'all' | 'majority';
+export type JoinStrategy = 'first' | 'first-position' | 'all' | 'majority';
 
 /**
  * Result from executing parallel branches.
@@ -69,7 +79,15 @@ export async function parallel<TIn, TOut>(
   let succeeded = 0;
   let failed = 0;
 
-  const results = await Promise.allSettled(
+  // Track the FIRST temporally-fulfilled branch so the 'first' strategy can
+  // implement true first-success semantics (issue #10). We can't observe
+  // settlement order from Promise.allSettled alone — so each branch tags a
+  // shared variable on resolve.
+  let firstSuccess: StateContract | undefined;
+
+  // Per-branch settled results, indexed by branch position so 'first-position'
+  // can recover the legacy ordering.
+  const settled: Array<PromiseSettledResult<StateContract>> = await Promise.allSettled(
     branches.map(async (branch) => {
       const wrapped = wrapAgent(branch.fn, {
         id: branch.id,
@@ -78,26 +96,34 @@ export async function parallel<TIn, TOut>(
       });
 
       const contract = await wrapped(input, traceId);
+      // Capture the first temporally successful contract for 'first' strategy.
+      if (firstSuccess === undefined) firstSuccess = contract;
       return contract;
     }),
   );
 
-  for (const result of results) {
+  // Track the per-branch contract (success path or HandoffFailure-attached
+  // contract on failure). `byIndex[i]` is undefined when a branch threw a
+  // non-HandoffFailure error and produced no contract.
+  const byIndex: Array<StateContract | undefined> = new Array(branches.length);
+
+  for (let i = 0; i < settled.length; i++) {
+    const result = settled[i];
     if (result.status === 'fulfilled') {
       contracts.push(result.value);
+      byIndex[i] = result.value;
       succeeded++;
     } else {
       failed++;
-      // Create a contract for the failed branch
       if (result.reason instanceof HandoffFailure) {
         contracts.push(result.reason.contract);
+        byIndex[i] = result.reason.contract;
       }
     }
   }
 
   const totalDurationMs = Date.now() - start;
-  const outputs = contracts.map(c => c.outputs.payload);
-  const output = joinOutputs(outputs, joinStrategy);
+  const output = joinOutputs(settled, byIndex, firstSuccess, joinStrategy);
 
   return {
     output: output as TOut,
@@ -110,25 +136,66 @@ export async function parallel<TIn, TOut>(
 }
 
 /**
- * Join multiple outputs using the specified strategy.
+ * Join branch results using the specified strategy.
+ *
+ * Inputs:
+ * - `settled`: per-branch settled results in branch-array order. Used by
+ *   `'first-position'` to preserve the legacy "index 0 wins" semantics.
+ * - `byIndex`: per-branch contracts (success or HandoffFailure-attached
+ *   failure contract). Used by `'all'` and `'majority'` so failed branches
+ *   still contribute their failure-marked payload to the join.
+ * - `firstSuccess`: the FIRST temporally-fulfilled branch contract. Used by
+ *   `'first'` to deliver true first-success semantics (issue #10).
  */
-function joinOutputs<T>(outputs: T[], strategy: JoinStrategy): T | T[] {
-  if (outputs.length === 0) {
+function joinOutputs(
+  settled: Array<PromiseSettledResult<StateContract>>,
+  byIndex: Array<StateContract | undefined>,
+  firstSuccess: StateContract | undefined,
+  strategy: JoinStrategy,
+): unknown {
+  if (settled.length === 0) {
     throw new Error('No outputs to join');
   }
 
   switch (strategy) {
-    case 'all':
-      return outputs as T[];
+    case 'all': {
+      // Preserve branch order; surface payloads where we have a contract.
+      const outs = byIndex.map((c) => c?.outputs.payload);
+      return outs;
+    }
 
-    case 'first':
-      return outputs[0];
+    case 'first': {
+      // True first-success (issue #10): the earliest fulfilled branch wins.
+      // If no branch succeeded, surface the failure of the first-position
+      // branch so the caller's `allCompleted=false`/`failed>0` signal is
+      // accompanied by an explanatory payload — but DO NOT pretend it
+      // succeeded. Callers should always check `succeeded > 0` before
+      // trusting a 'first' result.
+      if (firstSuccess !== undefined) {
+        return firstSuccess.outputs.payload;
+      }
+      // All branches failed. Fall back to the first-position branch's
+      // contract payload (which carries the failure) so the return shape
+      // stays consistent with `'first-position'`.
+      return byIndex[0]?.outputs.payload;
+    }
+
+    case 'first-position': {
+      // Legacy `'first'` semantics — first-by-index regardless of success.
+      // Preserved for callers that genuinely want positional behavior; new
+      // code should prefer `'first'` for first-success or `'all'` + manual
+      // selection.
+      return byIndex[0]?.outputs.payload;
+    }
 
     case 'majority': {
-      // Find the most common output (by JSON equality)
+      // Find the most common output (by canonical JSON equality). Only
+      // considers branches that produced a contract.
       const counts = new Map<string, { index: number; count: number }>();
-      for (let i = 0; i < outputs.length; i++) {
-        const key = JSON.stringify(outputs[i]);
+      for (let i = 0; i < byIndex.length; i++) {
+        const c = byIndex[i];
+        if (c === undefined) continue;
+        const key = JSON.stringify(c.outputs.payload);
         const existing = counts.get(key);
         if (existing) {
           existing.count++;
@@ -137,10 +204,15 @@ function joinOutputs<T>(outputs: T[], strategy: JoinStrategy): T | T[] {
         }
       }
 
+      if (counts.size === 0) {
+        // No contracts at all — every branch threw a non-HandoffFailure.
+        return undefined;
+      }
+
       const majority = Array.from(counts.values()).reduce(
         (a, b) => (a.count > b.count ? a : b),
       );
-      return outputs[majority.index];
+      return byIndex[majority.index]?.outputs.payload;
     }
   }
 }
