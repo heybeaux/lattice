@@ -2,6 +2,7 @@ import { SchemaValidator, ValidationResult as SchemaResult } from '../contract/v
 import { StateContract } from '../contract/types.js';
 import { CircuitBreaker } from './breaker.js';
 import { canonicalize, CanonicalMemo } from '../util/canonical.js';
+import { redactContract, type SensitivityLevel } from '../events/redact.js';
 import {
   TieredCircuitBreakerConfig,
   ValidationResult,
@@ -94,6 +95,10 @@ export class TieredCircuitBreaker {
   > & {
     /** L2 similarity threshold below which L3 is triggered (auto mode) */
     l3EscalationThreshold: number;
+    /** Whether to redact payloads before shipping to L2/L3 providers (issue #6) */
+    providerRedaction: 'redact' | 'raw';
+    /** Sensitivity level used when providerRedaction === 'redact' */
+    providerRedactionLevel: SensitivityLevel;
   };
 
   private readonly schemaValidator: SchemaValidator;
@@ -111,6 +116,11 @@ export class TieredCircuitBreaker {
       recoveryTimeoutMs: config?.recoveryTimeoutMs ?? 60_000,
       onReject: config?.onReject ?? 'abort',
       maxRetries: config?.maxRetries ?? 2,
+      // Default to redact: secrets in payloads must NOT leave the process
+      // unmodified to a remote LLM provider (issue #6 / SEC-004). Callers
+      // running self-hosted/on-prem providers can opt out with 'raw'.
+      providerRedaction: config?.providerRedaction ?? 'redact',
+      providerRedactionLevel: config?.providerRedactionLevel ?? 'high',
     };
 
     this.schemaValidator = new SchemaValidator();
@@ -187,13 +197,39 @@ export class TieredCircuitBreaker {
     // Canonicalize each payload at most once per validate() call. Shared
     // between L2 (embedding inputs) and L3 (judge inputs) so a single
     // tiered-breaker step never canonicalizes the same payload twice.
-    const canon = buildPayloadCanon(contract);
+    //
+    // SECURITY (issue #6 / SEC-004): when providerRedaction === 'redact'
+    // we build the L2/L3 canon over a *redacted* copy of the contract so
+    // raw secrets in inputs/outputs/decisions/constraints/assumptions
+    // never reach the embedding/judge provider. Validation correctness
+    // is unaffected for legitimate task content — only credential-shaped
+    // values are masked.
+    const canon = this.buildProviderCanon(contract);
 
     if (isAuto) {
       return this.validateAuto(contract, canon);
     }
 
     return this.validateManual(contract, canon);
+  }
+
+  /**
+   * Build the {@link PayloadCanon} that L2/L3 use to serialize payloads
+   * for the embedding / judge provider. Honors {@link this.config.providerRedaction}:
+   *
+   * - 'redact' (default): redact a deep clone of the contract via
+   *   {@link redactContract}, then canonicalize the redacted version.
+   * - 'raw': canonicalize the original contract — explicit opt-out for
+   *   self-hosted providers where the trust boundary is the same process.
+   */
+  private buildProviderCanon(contract: StateContract): PayloadCanon {
+    if (this.config.providerRedaction === 'raw') {
+      return buildPayloadCanon(contract);
+    }
+    const redacted = redactContract(contract, {
+      sensitivityLevel: this.config.providerRedactionLevel,
+    });
+    return buildPayloadCanon(redacted);
   }
 
   /**

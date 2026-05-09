@@ -50,6 +50,36 @@ export interface TieredCircuitBreakerConfig {
 
   /** Max retries when onReject is 'retry' (default: 2) */
   maxRetries?: number;
+
+  /**
+   * Redaction policy for payloads sent to external L2/L3 providers
+   * (issue #6 / SEC-004). Validation tiers serialize payload bodies and
+   * ship them to OpenAI's embedding/chat APIs — without redaction, raw
+   * secrets in `contract.inputs.payload`, `contract.outputs.payload`,
+   * decisions, constraints, and assumptions leave the trust boundary
+   * verbatim.
+   *
+   * Modes:
+   *  - 'redact' (DEFAULT): redact the contract via the same key-name +
+   *    pattern detectors used by `redactContract` before canonicalization,
+   *    so raw secrets never reach a remote provider.
+   *  - 'raw': ship payloads unredacted. Caller has explicitly accepted
+   *    that secrets in payloads will be transmitted to the configured
+   *    L2/L3 provider — only safe with self-hosted / on-prem providers.
+   *
+   * The redaction is applied ONLY to data leaving the process via L2/L3
+   * providers. The original contract returned to callers and emitted on
+   * the event bus is unchanged.
+   */
+  providerRedaction?: 'redact' | 'raw';
+
+  /**
+   * Sensitivity level used when {@link providerRedaction} is `'redact'`.
+   * Defaults to 'high' to maximize coverage on the secret-exfiltration
+   * boundary; downgrade to 'medium' or 'low' only when payload bodies
+   * legitimately need to retain phone/email/PII for the judge to evaluate.
+   */
+  providerRedactionLevel?: 'low' | 'medium' | 'high';
 }
 
 /**

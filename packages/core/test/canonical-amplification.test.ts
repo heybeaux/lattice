@@ -57,6 +57,11 @@ describe('TieredCircuitBreaker — canonicalization amplification (issue #17)', 
       l2Threshold: 0.0, // L2 always passes
       l3EscalationThreshold: 0.85, // similarity 0.5 < 0.85 → L3 runs
       l3ConfidenceThreshold: 0.0,
+      // Disable provider redaction so the spy can compare object identity
+      // against the raw inputsPayload reference. With redaction on (the new
+      // default for issue #6), we canonicalize a deep clone — that path is
+      // covered by the redaction tests in redact.test.ts and breaker.test.ts.
+      providerRedaction: 'raw',
     });
     cb.setEmbeddingProvider(makeEmbedding());
     cb.setJudgeProvider(makeJudge());
@@ -98,6 +103,7 @@ describe('TieredCircuitBreaker — canonicalization amplification (issue #17)', 
       tier: 'L1+L2+L3',
       l2Threshold: 0.0,
       l3ConfidenceThreshold: 0.0,
+      providerRedaction: 'raw', // see comment above
     });
     cb.setEmbeddingProvider(makeEmbedding());
     cb.setJudgeProvider(makeJudge());
