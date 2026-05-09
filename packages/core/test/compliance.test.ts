@@ -270,21 +270,35 @@ describe('ComplianceAuditLog', () => {
   });
 
   it('throws on concurrent append attempts', () => {
-    const log = new ComplianceAuditLog({ logPath: TEST_LOG_PATH });
+    // Cross-process file-lock semantics: a stranded `<path>.lock` from a
+    // live writer must block other writers until released. We simulate the
+    // "another writer holds the lock" condition by creating the lockfile
+    // ourselves with a live PID and a short lockTimeoutMs so the contended
+    // append fails quickly. (Replaces main's deprecated in-process
+    // acquireLock/appendUnsafe boolean-mutex test — same property, real
+    // POSIX-style lock.)
+    const log = new ComplianceAuditLog({
+      logPath: TEST_LOG_PATH,
+      lockTimeoutMs: 50,
+      lockStaleMs: 60_000,
+    });
     log.append({ stepId: 'step1' });
 
-    // Simulate concurrent access by manually acquiring lock
-    expect(() => {
-      (log as any).acquireLock();
-      (log as any).appendUnsafe({ stepId: 'step2' });
-    }).not.toThrow();
+    const lockPath = `${TEST_LOG_PATH}.lock`;
+    fs.writeFileSync(
+      lockPath,
+      JSON.stringify({ pid: process.pid, startedAt: Date.now() }),
+    );
 
-    // Second append should fail due to lock
-    expect(() => log.append({ stepId: 'step3' })).toThrow('concurrent append detected');
+    try {
+      expect(() => log.append({ stepId: 'step2' })).toThrow(
+        /lock acquisition timed out/i,
+      );
+    } finally {
+      fs.unlinkSync(lockPath);
+    }
 
-    // Release lock
-    (log as any).releaseLock();
-    // Now it should work
+    // Lock released — append works again.
     expect(() => log.append({ stepId: 'step3' })).not.toThrow();
   });
 
