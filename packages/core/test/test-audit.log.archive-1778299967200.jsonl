@@ -1,2 +1,0 @@
-{"sequence":1,"timestamp":"2026-05-07T04:12:47.200Z","previousHash":"0000000000000000000000000000000000000000000000000000000000000000","contentHash":"old-hash","data":{"old":true}}
-{"type":"retention_checkpoint","archivedEntries":1,"remainingEntries":1,"archiveHash":"a34240dfadae1b16e4103dfd91be2f4277e4d47b8a03227e329d8ef59d42e17b","timestamp":"2026-05-09T04:12:47.200Z"}
