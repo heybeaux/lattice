@@ -24,7 +24,20 @@ export interface WrapAgentConfig<TIn, TOut> {
   /** Unique identifier for this agent */
   id: string;
 
-  /** Circuit breaker configuration */
+  /**
+   * Circuit breaker configuration.
+   *
+   * NOTE (issue #23, H14): the breaker config's `onReject: 'retry'` and
+   * `maxRetries` options are accepted for backward compatibility but no
+   * longer trigger an internal retry loop here. Retry is an orchestration
+   * concern and lives at the pipeline level (`PipelineBuilder.onReject`).
+   * Stacking a wrapper retry inside a pipeline retry compounded retry
+   * counts (up to 9 agent invocations per "configured retry"); see the
+   * 2026-05-08 audit, finding H14. When `onReject: 'retry'` is set on the
+   * breaker config, this wrapper now behaves identically to `'abort'` —
+   * it throws a HandoffFailure and lets the surrounding orchestrator
+   * (pipeline, parallel, or your own driver) decide whether to retry.
+   */
   breaker?: TieredCircuitBreakerConfig;
 
   /** Resource budget limits for this agent */
@@ -35,6 +48,13 @@ export interface WrapAgentConfig<TIn, TOut> {
     maxCost?: number;
   };
 }
+
+/**
+ * Module-local set tracking which agent ids have already received the
+ * deprecation warning so a noisy pipeline doesn't spam stderr on every
+ * call. Process-local; reset across processes.
+ */
+const _retryDeprecationWarned = new Set<string>();
 
 /**
  * A wrapped agent function. Takes input and returns a State Contract.
@@ -161,35 +181,30 @@ export function wrapAgent<TIn = unknown, TOut = unknown>(
           }) as StateContract<TIn, TOut>;
 
         case 'retry':
-          // Re-execute with enriched context (max N retries)
-          const maxRetries = config.breaker?.maxRetries ?? 2;
-          for (let i = 0; i < maxRetries; i++) {
-            try {
-              const retryOutput = await agentFn(input);
-              const retryContract = createContract<TIn, TOut>({
-                fromAgent: config.id,
-                traceId: contract.traceId,
-                inputs: input,
-                outputs: retryOutput,
-                budget: {
-                  tokensUsed: 0,
-                  callsMade: 0,
-                  wallClockMs: Date.now() - start,
-                  limit: config.budget,
-                },
-              });
-
-              const retryValidation = await breaker.validate(retryContract);
-              if (retryValidation.passed) {
-                return retryContract;
-              }
-            } catch {
-              // Agent threw again — continue to next retry
-            }
+          // Issue #23 (H14): the wrapper-level retry loop has been removed
+          // to fix retry compounding. When this wrapper sat inside a
+          // pipeline that also retried, the two layers multiplied (e.g.
+          // wrapper maxRetries=2 × pipeline maxRetries=2 ⇒ 9 agent
+          // invocations per "configured retry"). Retry is an orchestration
+          // concern and now lives ONLY in the surrounding orchestrator
+          // (PipelineBuilder.onReject('retry'), or your own driver).
+          //
+          // We accept `onReject: 'retry'` on the config for backward
+          // compatibility — but it now behaves identically to `'abort'`,
+          // letting the surrounding orchestrator decide whether to retry.
+          // A one-time per-agent deprecation warning makes the change
+          // visible without spamming stderr in a hot loop.
+          if (!_retryDeprecationWarned.has(config.id)) {
+            _retryDeprecationWarned.add(config.id);
+            // eslint-disable-next-line no-console
+            console.warn(
+              `[lattice] wrapAgent("${config.id}"): breaker.onReject='retry' is deprecated and now behaves like 'abort'. ` +
+                `Move retry orchestration to the pipeline layer (PipelineBuilder.onReject('retry', { maxRetries })). ` +
+                `See issue #23 / audit finding H14.`,
+            );
           }
-          // All retries exhausted — abort
           throw new HandoffFailure(
-            `Agent "${config.id}" failed after ${maxRetries} retries`,
+            `Agent "${config.id}" output rejected at ${validation.tier}: ${validation.reason}`,
             validation,
             contract,
           );
