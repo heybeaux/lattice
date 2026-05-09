@@ -96,3 +96,24 @@ export type {
   ComplianceConfig,
   AuditLogEntry,
 } from './compliance/audit-log.js';
+
+export {
+  verifyAuditLog,
+  verifyAuditLogDetailed,
+  generateVerificationCertificate,
+  verifyCertificate,
+} from './compliance/verification.js';
+export type {
+  VerificationResult,
+  DetailedVerificationResult,
+} from './compliance/verification.js';
+
+export {
+  hasPermission,
+  getPermissions,
+  enforcePermission,
+} from './compliance/rbac.js';
+export type {
+  ComplianceRole,
+  CompliancePermission,
+} from './compliance/rbac.js';

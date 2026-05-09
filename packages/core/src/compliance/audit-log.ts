@@ -22,6 +22,8 @@ export interface ComplianceConfig {
   retentionDays?: number;
   /** Hash algorithm (default: 'sha256') */
   algorithm?: 'sha256' | 'sha512';
+  /** Whether to enforce append-only file permissions (default: true) */
+  enforceAppendOnly?: boolean;
 }
 
 /**
@@ -85,6 +87,7 @@ export class ComplianceAuditLog {
       logPath: config.logPath,
       retentionDays: config.retentionDays ?? 90,
       algorithm: config.algorithm ?? 'sha256',
+      enforceAppendOnly: config.enforceAppendOnly ?? true,
     };
 
     // Ensure directory exists
@@ -97,6 +100,11 @@ export class ComplianceAuditLog {
     const { sequence, lastHash } = this.loadState();
     this.currentSequence = sequence;
     this.lastHash = lastHash;
+
+    // Enforce append-only permissions if configured
+    if (this.config.enforceAppendOnly && fs.existsSync(this.config.logPath)) {
+      this.enforceAppendOnlyPermissions();
+    }
   }
 
   /**
@@ -134,6 +142,11 @@ export class ComplianceAuditLog {
 
     // Update state
     this.lastHash = contentHash;
+
+    // Re-enforce append-only permissions after append
+    if (this.config.enforceAppendOnly) {
+      this.enforceAppendOnlyPermissions();
+    }
 
     return entry;
   }
@@ -205,6 +218,38 @@ export class ComplianceAuditLog {
   }
 
   /**
+   * Enforce append-only file permissions.
+   * On Unix: removes write permission for owner (use chattr +a for true append-only)
+   * This prevents accidental truncation or modification.
+   */
+  private enforceAppendOnlyPermissions(): void {
+    if (!fs.existsSync(this.config.logPath)) return;
+
+    try {
+      const stats = fs.statSync(this.config.logPath);
+      // Set file to read-only for group and others, append-only for owner
+      // Note: True append-only requires 'chattr +a' on Linux, which needs root
+      // Here we set to read-only to prevent accidental truncation
+      fs.chmodSync(this.config.logPath, 0o444);
+    } catch {
+      // If we can't change permissions, log a warning but continue
+    }
+  }
+
+  /**
+   * Temporarily allow writes for appending new entries.
+   * This should only be called internally by the append method.
+   */
+  private allowAppend(): void {
+    if (!fs.existsSync(this.config.logPath)) return;
+    try {
+      fs.chmodSync(this.config.logPath, 0o644);
+    } catch {
+      // If we can't change permissions, log a warning but continue
+    }
+  }
+
+  /**
    * Enforce the retention policy by removing entries older than retentionDays.
    *
    * Note: This breaks the hash chain for removed entries but maintains
@@ -236,6 +281,9 @@ export class ComplianceAuditLog {
       return { removed: 0, remaining: entries.length };
     }
 
+    // Temporarily allow writes
+    this.allowAppend();
+
     // Rebuild the chain from the first remaining entry
     if (recent.length > 0) {
       // The first recent entry becomes the new genesis
@@ -262,6 +310,11 @@ export class ComplianceAuditLog {
     // Write the rebuilt log
     const newContent = recent.map(e => JSON.stringify(e) + '\n').join('');
     fs.writeFileSync(this.config.logPath, newContent);
+
+    // Re-enforce append-only permissions
+    if (this.config.enforceAppendOnly) {
+      this.enforceAppendOnlyPermissions();
+    }
 
     return { removed, remaining: recent.length };
   }

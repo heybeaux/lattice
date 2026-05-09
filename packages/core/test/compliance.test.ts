@@ -1,5 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { ComplianceAuditLog, GENESIS_HASH } from '../src/index.js';
+import {
+  ComplianceAuditLog,
+  GENESIS_HASH,
+  verifyAuditLog,
+  verifyAuditLogDetailed,
+  generateVerificationCertificate,
+  verifyCertificate,
+  hasPermission,
+  getPermissions,
+  enforcePermission,
+} from '../src/index.js';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -8,12 +18,14 @@ const TEST_LOG_PATH = path.join(__dirname, 'test-audit.log');
 describe('ComplianceAuditLog', () => {
   beforeEach(() => {
     if (fs.existsSync(TEST_LOG_PATH)) {
+      fs.chmodSync(TEST_LOG_PATH, 0o644);
       fs.unlinkSync(TEST_LOG_PATH);
     }
   });
 
   afterEach(() => {
     if (fs.existsSync(TEST_LOG_PATH)) {
+      fs.chmodSync(TEST_LOG_PATH, 0o644);
       fs.unlinkSync(TEST_LOG_PATH);
     }
   });
@@ -59,14 +71,12 @@ describe('ComplianceAuditLog', () => {
     log.append({ stepId: 'step2' });
     log.append({ stepId: 'step3' });
 
-    // Read the file and tamper with entry1's data
+    // Tamper with the log file directly
     const content = fs.readFileSync(TEST_LOG_PATH, 'utf-8');
     const lines = content.split('\n').filter(l => l.trim());
     const entry1 = JSON.parse(lines[0]);
-
     // Store original hash to verify it changes
     const originalHash = entry1.contentHash;
-
     // Tamper with data
     entry1.data = { tampered: true };
     // DON'T update contentHash - this is what makes it detectable
@@ -207,5 +217,154 @@ describe('ComplianceAuditLog', () => {
 
     const entry = log.append({ stepId: 'first' });
     expect(entry.sequence).toBe(1);
+  });
+});
+
+describe('Verification API', () => {
+  beforeEach(() => {
+    if (fs.existsSync(TEST_LOG_PATH)) {
+      fs.chmodSync(TEST_LOG_PATH, 0o644);
+      fs.unlinkSync(TEST_LOG_PATH);
+    }
+  });
+
+  afterEach(() => {
+    if (fs.existsSync(TEST_LOG_PATH)) {
+      fs.chmodSync(TEST_LOG_PATH, 0o644);
+      fs.unlinkSync(TEST_LOG_PATH);
+    }
+  });
+
+  it('verifies a valid log', () => {
+    const log = new ComplianceAuditLog({ logPath: TEST_LOG_PATH });
+    log.append({ stepId: 'step1' });
+    log.append({ stepId: 'step2' });
+    log.append({ stepId: 'step3' });
+
+    const result = verifyAuditLog(TEST_LOG_PATH);
+    expect(result.valid).toBe(true);
+    expect(result.lastValidSequence).toBe(3);
+    expect(result.totalEntries).toBe(3);
+  });
+
+  it('detects tampering', () => {
+    const log = new ComplianceAuditLog({ logPath: TEST_LOG_PATH });
+    log.append({ stepId: 'step1' });
+    log.append({ stepId: 'step2' });
+
+    // Tamper with the file
+    const content = fs.readFileSync(TEST_LOG_PATH, 'utf-8');
+    const lines = content.split('\n').filter(l => l.trim());
+    const entry1 = JSON.parse(lines[0]);
+    entry1.data = { tampered: true };
+    lines[0] = JSON.stringify(entry1);
+    fs.writeFileSync(TEST_LOG_PATH, lines.join('\n') + '\n');
+
+    const result = verifyAuditLog(TEST_LOG_PATH);
+    expect(result.valid).toBe(false);
+    expect(result.error).toContain('Content hash mismatch');
+  });
+
+  it('provides detailed verification', () => {
+    const log = new ComplianceAuditLog({ logPath: TEST_LOG_PATH });
+    log.append({ stepId: 'step1' });
+    log.append({ stepId: 'step2' });
+    log.append({ stepId: 'step3' });
+
+    const result = verifyAuditLogDetailed(TEST_LOG_PATH);
+    expect(result.valid).toBe(true);
+    expect(result.entries).toHaveLength(3);
+    expect(result.entries.every(e => e.valid)).toBe(true);
+  });
+
+  it('generates a verification certificate', () => {
+    const log = new ComplianceAuditLog({ logPath: TEST_LOG_PATH });
+    log.append({ stepId: 'step1' });
+    log.append({ stepId: 'step2' });
+
+    const { certificate, verification } = generateVerificationCertificate(TEST_LOG_PATH);
+
+    expect(certificate).toContain('BEGIN LATTICE AUDIT LOG CERTIFICATE');
+    expect(certificate).toContain('END LATTICE AUDIT LOG CERTIFICATE');
+    expect(certificate).toContain('Certificate Hash:');
+    expect(verification.valid).toBe(true);
+    expect(verification.lastValidSequence).toBe(2);
+  });
+
+  it('verifies a certificate', () => {
+    const log = new ComplianceAuditLog({ logPath: TEST_LOG_PATH });
+    log.append({ stepId: 'step1' });
+    log.append({ stepId: 'step2' });
+
+    const { certificate } = generateVerificationCertificate(TEST_LOG_PATH);
+    const isValid = verifyCertificate(certificate, TEST_LOG_PATH);
+    expect(isValid).toBe(true);
+  });
+
+  it('detects certificate tampering', () => {
+    const log = new ComplianceAuditLog({ logPath: TEST_LOG_PATH });
+    log.append({ stepId: 'step1' });
+
+    const { certificate } = generateVerificationCertificate(TEST_LOG_PATH);
+
+    // Tamper with the log after certificate generation
+    const content = fs.readFileSync(TEST_LOG_PATH, 'utf-8');
+    const lines = content.split('\n').filter(l => l.trim());
+    const entry1 = JSON.parse(lines[0]);
+    entry1.data = { tampered: true };
+    lines[0] = JSON.stringify(entry1);
+    fs.writeFileSync(TEST_LOG_PATH, lines.join('\n') + '\n');
+
+    const isValid = verifyCertificate(certificate, TEST_LOG_PATH);
+    expect(isValid).toBe(false);
+  });
+});
+
+describe('RBAC', () => {
+  it('admin has full permissions', () => {
+    const perms = getPermissions('admin');
+    expect(perms.canView).toBe(true);
+    expect(perms.canExport).toBe(true);
+    expect(perms.canVerify).toBe(true);
+    expect(perms.canModifyRetention).toBe(true);
+    expect(perms.canDelete).toBe(true);
+  });
+
+  it('auditor can view and export but not modify', () => {
+    const perms = getPermissions('auditor');
+    expect(perms.canView).toBe(true);
+    expect(perms.canExport).toBe(true);
+    expect(perms.canVerify).toBe(true);
+    expect(perms.canModifyRetention).toBe(false);
+    expect(perms.canDelete).toBe(false);
+  });
+
+  it('viewer can only view', () => {
+    const perms = getPermissions('viewer');
+    expect(perms.canView).toBe(true);
+    expect(perms.canExport).toBe(false);
+    expect(perms.canVerify).toBe(false);
+    expect(perms.canModifyRetention).toBe(false);
+    expect(perms.canDelete).toBe(false);
+  });
+
+  it('hasPermission works correctly', () => {
+    expect(hasPermission('admin', 'canDelete')).toBe(true);
+    expect(hasPermission('auditor', 'canDelete')).toBe(false);
+    expect(hasPermission('viewer', 'canExport')).toBe(false);
+  });
+
+  it('enforcePermission throws for unauthorized actions', () => {
+    expect(() => enforcePermission('viewer', 'canExport', 'export audit log')).toThrow(
+      "Access denied: role 'viewer' cannot export audit log"
+    );
+
+    expect(() => enforcePermission('auditor', 'canDelete', 'delete audit log')).toThrow(
+      "Access denied: role 'auditor' cannot delete audit log"
+    );
+
+    // Should not throw for authorized actions
+    expect(() => enforcePermission('admin', 'canDelete', 'delete audit log')).not.toThrow();
+    expect(() => enforcePermission('auditor', 'canView', 'view audit log')).not.toThrow();
   });
 });
