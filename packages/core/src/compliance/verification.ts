@@ -8,13 +8,17 @@
  * - File integrity (detect truncation, modification, injection)
  *
  * Designed for SOC 2 compliance and regulatory audits.
+ *
+ * Memory: all read paths stream the log line-by-line. No `readFileSync` of
+ * the full file — safe to run against multi-gigabyte logs.
  */
 
 import * as crypto from 'crypto';
 import * as fs from 'fs';
-import type { AuditLogEntry } from './audit-log';
+import { streamVerifySync, GENESIS_HASH } from './audit-log.js';
+import type { AuditLogEntry } from './audit-log.js';
 
-const VERIFICATION_GENESIS_HASH = '0000000000000000000000000000000000000000000000000000000000000000';
+const VERIFICATION_GENESIS_HASH = GENESIS_HASH;
 
 /**
  * Recursively sort all object keys for deterministic JSON serialization.
@@ -73,6 +77,8 @@ export interface DetailedVerificationResult extends VerificationResult {
 /**
  * Verify the integrity of an audit log file.
  *
+ * Streams the log line-by-line; bounded memory regardless of file size.
+ *
  * Checks:
  * 1. Each entry is valid JSON
  * 2. Sequence numbers are monotonically increasing starting from 1
@@ -87,101 +93,13 @@ export function verifyAuditLog(
   logPath: string,
   algorithm: 'sha256' | 'sha512' = 'sha256',
 ): VerificationResult {
-  if (!fs.existsSync(logPath)) {
-    return {
-      valid: true,
-      error: undefined,
-      lastValidSequence: 0,
-      totalEntries: 0,
-      lastHash: VERIFICATION_GENESIS_HASH,
-      verifiedAt: new Date().toISOString(),
-      algorithm,
-    };
-  }
-
-  const content = fs.readFileSync(logPath, 'utf-8');
-  const lines = content.split('\n').filter(l => l.trim());
-
-  let expectedSequence = 0;
-  let expectedHash = VERIFICATION_GENESIS_HASH;
-  let lastHash = VERIFICATION_GENESIS_HASH;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    let entry: AuditLogEntry;
-
-    try {
-      entry = JSON.parse(line);
-    } catch {
-      return {
-        valid: false,
-        error: `Invalid JSON at line ${i + 1} (sequence ${expectedSequence + 1})`,
-        lastValidSequence: expectedSequence,
-        totalEntries: lines.length,
-        lastHash,
-        verifiedAt: new Date().toISOString(),
-        algorithm,
-      };
-    }
-
-    // Check sequence number
-    if (entry.sequence !== expectedSequence + 1) {
-      return {
-        valid: false,
-        error: `Sequence mismatch at line ${i + 1}: expected ${expectedSequence + 1}, got ${entry.sequence}`,
-        lastValidSequence: expectedSequence,
-        totalEntries: lines.length,
-        lastHash,
-        verifiedAt: new Date().toISOString(),
-        algorithm,
-      };
-    }
-
-    // Check previous hash
-    if (entry.previousHash !== expectedHash) {
-      return {
-        valid: false,
-        error: `Hash chain broken at sequence ${entry.sequence}: expected previous hash ${expectedHash.slice(0, 16)}..., got ${entry.previousHash.slice(0, 16)}...`,
-        lastValidSequence: expectedSequence,
-        totalEntries: lines.length,
-        lastHash,
-        verifiedAt: new Date().toISOString(),
-        algorithm,
-      };
-    }
-
-    // Verify content hash
-    const entryWithoutHash = {
-      sequence: entry.sequence,
-      timestamp: entry.timestamp,
-      previousHash: entry.previousHash,
-      data: entry.data,
-    };
-    const computedHash = computeHash(entryWithoutHash, algorithm);
-
-    if (entry.contentHash !== computedHash) {
-      return {
-        valid: false,
-        error: `Content hash mismatch at sequence ${entry.sequence}: entry was modified after creation`,
-        lastValidSequence: expectedSequence,
-        totalEntries: lines.length,
-        lastHash,
-        verifiedAt: new Date().toISOString(),
-        algorithm,
-      };
-    }
-
-    expectedSequence = entry.sequence;
-    expectedHash = entry.contentHash;
-    lastHash = entry.contentHash;
-  }
-
+  const result = streamVerifySync(logPath, algorithm);
   return {
-    valid: true,
-    error: undefined,
-    lastValidSequence: expectedSequence,
-    totalEntries: lines.length,
-    lastHash,
+    valid: result.valid,
+    error: result.error,
+    lastValidSequence: result.lastValidSequence,
+    totalEntries: result.totalEntries,
+    lastHash: result.lastHash,
     verifiedAt: new Date().toISOString(),
     algorithm,
   };
@@ -189,6 +107,10 @@ export function verifyAuditLog(
 
 /**
  * Perform detailed verification with per-entry status.
+ *
+ * Streams the log line-by-line. The per-entry array is the only unbounded
+ * allocation (one record per entry); for very large logs prefer
+ * {@link verifyAuditLog}, which keeps O(1) memory.
  */
 export function verifyAuditLogDetailed(
   logPath: string,
@@ -206,8 +128,6 @@ export function verifyAuditLogDetailed(
     };
   }
 
-  const content = fs.readFileSync(logPath, 'utf-8');
-  const lines = content.split('\n').filter(l => l.trim());
   const entryResults: Array<{ sequence: number; valid: boolean; error?: string }> = [];
 
   let expectedSequence = 0;
@@ -215,24 +135,28 @@ export function verifyAuditLogDetailed(
   let lastHash = VERIFICATION_GENESIS_HASH;
   let overallValid = true;
   let lastValidSequence = 0;
+  let totalEntries = 0;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  const fd = fs.openSync(logPath, 'r');
+  const stat = fs.fstatSync(fd);
+  const CHUNK = 64 * 1024;
+  const buf = Buffer.alloc(CHUNK);
+  let carry = '';
+  let pos = 0;
+
+  const processLine = (raw: string): void => {
+    if (!raw.trim()) return;
+    totalEntries++;
+
     let entry: AuditLogEntry;
-
     try {
-      entry = JSON.parse(line);
+      entry = JSON.parse(raw);
     } catch {
-      entryResults.push({
-        sequence: expectedSequence + 1,
-        valid: false,
-        error: 'Invalid JSON',
-      });
+      entryResults.push({ sequence: expectedSequence + 1, valid: false, error: 'Invalid JSON' });
       overallValid = false;
-      continue;
+      return;
     }
 
-    // Check sequence number
     if (entry.sequence !== expectedSequence + 1) {
       entryResults.push({
         sequence: entry.sequence,
@@ -240,10 +164,9 @@ export function verifyAuditLogDetailed(
         error: `Sequence mismatch: expected ${expectedSequence + 1}, got ${entry.sequence}`,
       });
       overallValid = false;
-      continue;
+      return;
     }
 
-    // Check previous hash
     if (entry.previousHash !== expectedHash) {
       entryResults.push({
         sequence: entry.sequence,
@@ -251,10 +174,9 @@ export function verifyAuditLogDetailed(
         error: 'Hash chain broken',
       });
       overallValid = false;
-      continue;
+      return;
     }
 
-    // Verify content hash
     const entryWithoutHash = {
       sequence: entry.sequence,
       timestamp: entry.timestamp,
@@ -262,7 +184,6 @@ export function verifyAuditLogDetailed(
       data: entry.data,
     };
     const computedHash = computeHash(entryWithoutHash, algorithm);
-
     if (entry.contentHash !== computedHash) {
       entryResults.push({
         sequence: entry.sequence,
@@ -270,23 +191,42 @@ export function verifyAuditLogDetailed(
         error: 'Content hash mismatch (modified)',
       });
       overallValid = false;
-      continue;
+      return;
     }
 
-    entryResults.push({
-      sequence: entry.sequence,
-      valid: true,
-    });
+    entryResults.push({ sequence: entry.sequence, valid: true });
     expectedSequence = entry.sequence;
     expectedHash = entry.contentHash;
     lastHash = entry.contentHash;
     lastValidSequence = entry.sequence;
+  };
+
+  try {
+    while (pos < stat.size) {
+      const n = fs.readSync(fd, buf, 0, Math.min(CHUNK, stat.size - pos), pos);
+      if (n <= 0) break;
+      pos += n;
+      carry += buf.subarray(0, n).toString('utf-8');
+      let nl: number;
+      while ((nl = carry.indexOf('\n')) >= 0) {
+        const raw = carry.slice(0, nl);
+        carry = carry.slice(nl + 1);
+        processLine(raw);
+      }
+    }
+    // Trailing partial line (no terminating \n) — flag as invalid JSON
+    if (carry.trim()) {
+      processLine(carry);
+    }
+  } finally {
+    fs.closeSync(fd);
   }
 
   return {
     valid: overallValid,
+    error: overallValid ? undefined : entryResults.find(e => !e.valid)?.error,
     lastValidSequence,
-    totalEntries: lines.length,
+    totalEntries,
     lastHash,
     verifiedAt: new Date().toISOString(),
     algorithm,
@@ -334,6 +274,11 @@ Certificate Hash: ${certificateHash}
 
 /**
  * Verify a verification certificate against the current audit log.
+ *
+ * Parses the verification fields stored in the certificate text and
+ * re-checks them against a fresh chain verification. The certificate is
+ * valid iff every chain-relevant field (validity, last-valid sequence, total
+ * entries, last hash, algorithm) matches the current log's verification.
  */
 export function verifyCertificate(
   certificate: string,
@@ -341,18 +286,70 @@ export function verifyCertificate(
   algorithm: 'sha256' | 'sha512' = 'sha256',
 ): boolean {
   try {
-    // Extract the certificate hash
-    const hashMatch = certificate.match(/Certificate Hash: ([a-f0-9]+)/);
-    if (!hashMatch) return false;
-    const expectedHash = hashMatch[1];
+    const expected = parseCertificate(certificate);
+    if (!expected) return false;
 
-    // Regenerate the certificate
-    const { certificate: regeneratedCertificate } = generateVerificationCertificate(logPath, algorithm);
-    const regeneratedHashMatch = regeneratedCertificate.match(/Certificate Hash: ([a-f0-9]+)/);
-    if (!regeneratedHashMatch) return false;
+    const fresh = verifyAuditLog(logPath, expected.algorithm as 'sha256' | 'sha512');
 
-    return expectedHash === regeneratedHashMatch[1];
+    return (
+      expected.valid === fresh.valid &&
+      expected.lastValidSequence === fresh.lastValidSequence &&
+      expected.totalEntries === fresh.totalEntries &&
+      expected.lastHash === fresh.lastHash &&
+      expected.algorithm === fresh.algorithm &&
+      // The caller may have requested a different algorithm than the cert
+      // was generated with — reject in that case.
+      expected.algorithm === algorithm
+    );
   } catch {
     return false;
   }
+}
+
+interface ParsedCertificate {
+  logPath: string;
+  valid: boolean;
+  lastValidSequence: number;
+  totalEntries: number;
+  lastHash: string;
+  algorithm: string;
+  verifiedAt: string;
+  certificateHash: string;
+}
+
+function parseCertificate(certificate: string): ParsedCertificate | null {
+  const get = (label: string): string | null => {
+    const m = certificate.match(new RegExp(`^${label}: (.*)$`, 'm'));
+    return m ? m[1].trim() : null;
+  };
+  const logPath = get('Log Path');
+  const validStr = get('Verification');
+  const lvs = get('Last Valid Sequence');
+  const total = get('Total Entries');
+  const lastHash = get('Last Hash');
+  const algorithm = get('Algorithm');
+  const verifiedAt = get('Verified At');
+  const certHash = get('Certificate Hash');
+  if (
+    logPath === null ||
+    validStr === null ||
+    lvs === null ||
+    total === null ||
+    lastHash === null ||
+    algorithm === null ||
+    verifiedAt === null ||
+    certHash === null
+  ) {
+    return null;
+  }
+  return {
+    logPath,
+    valid: validStr === 'VALID',
+    lastValidSequence: Number(lvs),
+    totalEntries: Number(total),
+    lastHash,
+    algorithm,
+    verifiedAt,
+    certificateHash: certHash,
+  };
 }
