@@ -177,6 +177,191 @@ def test_audit_logger_writes_jsonl():
         os.unlink(path)
 
 
+# --- Issue #27 / FINDING-009 — fail-closed on L2/L3 provider errors ---
+
+
+def test_l2_fails_closed_on_openai_import_error():
+    """If OpenAI SDK or numpy aren't importable, L2 must NOT pass."""
+    with patch.dict("sys.modules", {"openai": None}):
+        from lattice_langgraph.breaker import validate_l2
+
+        result = validate_l2({"q": "x"}, {"a": "y"}, openai_api_key="anything")
+        assert result.passed is False
+        assert result.tier == "L2"
+        assert "L2 provider error" in result.reason
+
+
+def test_l3_fails_closed_on_openai_import_error():
+    with patch.dict("sys.modules", {"openai": None}):
+        from lattice_langgraph.breaker import validate_l3
+
+        result = validate_l3({"q": "x"}, {"a": "y"}, openai_api_key="anything")
+        assert result.passed is False
+        assert result.tier == "L3"
+        assert "L3 provider error" in result.reason
+
+
+def test_l3_clamps_attacker_supplied_confidence():
+    """A judge response with confidence=999 must be clamped to 1.0,
+    not trusted verbatim — defense-in-depth alongside the TS provider fix."""
+    from lattice_langgraph.breaker import validate_l3
+
+    fake_response = type(
+        "R",
+        (),
+        {
+            "choices": [
+                type(
+                    "C",
+                    (),
+                    {
+                        "message": type(
+                            "M",
+                            (),
+                            {"content": '{"passed": true, "confidence": 999, "reason": "x"}'},
+                        )()
+                    },
+                )()
+            ]
+        },
+    )()
+
+    class FakeOpenAI:
+        def __init__(self, **_):
+            self.chat = type("C", (), {"completions": type("X", (), {"create": lambda self, **kw: fake_response})()})()
+
+    with patch("openai.OpenAI", FakeOpenAI):
+        r = validate_l3({"q": "x"}, {"a": "y"}, openai_api_key="anything")
+        assert r.passed is True
+        assert r.confidence == 1.0
+
+
+def test_l3_rejects_non_bool_passed_field():
+    """If the judge returns passed: 'yes' (string), treat it as False."""
+    from lattice_langgraph.breaker import validate_l3
+
+    fake_response = type(
+        "R",
+        (),
+        {
+            "choices": [
+                type(
+                    "C",
+                    (),
+                    {
+                        "message": type(
+                            "M",
+                            (),
+                            {"content": '{"passed": "yes", "confidence": 1, "reason": "x"}'},
+                        )()
+                    },
+                )()
+            ]
+        },
+    )()
+
+    class FakeOpenAI:
+        def __init__(self, **_):
+            self.chat = type("C", (), {"completions": type("X", (), {"create": lambda self, **kw: fake_response})()})()
+
+    with patch("openai.OpenAI", FakeOpenAI):
+        r = validate_l3({"q": "x"}, {"a": "y"}, openai_api_key="anything")
+        assert r.passed is False
+
+
+def test_run_circuit_breaker_l2_failure_blocks_in_default_mode():
+    """End-to-end: L2 provider error → wrapper raises by default."""
+    from lattice_langgraph import BreakerConfig
+    from lattice_langgraph.breaker import ValidationResult
+
+    def fake_l2(*a, **kw):
+        return ValidationResult(passed=False, tier="L2", confidence=0.0, latency_ms=1, reason="L2 provider error: bad creds")
+
+    with patch("lattice_langgraph.breaker.validate_l2", fake_l2):
+        node = make_node({})
+        wrapped = wrap_node(
+            node,
+            agent_id="net_blocked",
+            breaker_config=BreakerConfig(tier="L2", openai_api_key="invalid"),
+        )
+        with pytest.raises(LatticeValidationError) as exc:
+            wrapped({"x": 1})
+        assert "L2 provider error" in str(exc.value)
+
+
+def test_run_circuit_breaker_l3_failure_blocks_in_default_mode():
+    from lattice_langgraph import BreakerConfig
+    from lattice_langgraph.breaker import ValidationResult
+
+    def fake_l3(*a, **kw):
+        return ValidationResult(passed=False, tier="L3", confidence=0.0, latency_ms=1, reason="L3 provider error: net down")
+
+    with patch("lattice_langgraph.breaker.validate_l3", fake_l3):
+        node = make_node({})
+        wrapped = wrap_node(
+            node,
+            agent_id="judge_blocked",
+            breaker_config=BreakerConfig(tier="L3", openai_api_key="invalid"),
+        )
+        with pytest.raises(LatticeValidationError):
+            wrapped({"x": 1})
+
+
+def test_l2_failure_passes_through_when_block_on_failure_is_false():
+    """Explicit opt-in to non-blocking mode: validation runs, logs the
+    failure, but does not raise. Use this for staged rollouts where you
+    want to monitor L2/L3 health without affecting graph execution."""
+    from lattice_langgraph import BreakerConfig
+    from lattice_langgraph.breaker import ValidationResult
+
+    def fake_l2(*a, **kw):
+        return ValidationResult(passed=False, tier="L2", confidence=0.0, latency_ms=1, reason="degraded")
+
+    with patch("lattice_langgraph.breaker.validate_l2", fake_l2):
+        node = make_node({"out": 1})
+        wrapped = wrap_node(
+            node,
+            agent_id="degraded_node",
+            breaker_config=BreakerConfig(tier="L2", block_on_failure=False),
+        )
+        output = wrapped({"x": 1})  # must NOT raise
+        assert output == {"out": 1}
+
+
+def test_l2_failure_does_not_block_when_shadow_mode():
+    """Shadow mode: validation runs (and is logged), never blocks."""
+    from lattice_langgraph import BreakerConfig
+    from lattice_langgraph.breaker import ValidationResult
+
+    def fake_l2(*a, **kw):
+        return ValidationResult(passed=False, tier="L2", confidence=0.0, latency_ms=1, reason="degraded")
+
+    with patch("lattice_langgraph.breaker.validate_l2", fake_l2):
+        node = make_node({"out": 2})
+        wrapped = wrap_node(
+            node,
+            agent_id="shadow_node",
+            shadow=True,
+            breaker_config=BreakerConfig(tier="L2"),
+        )
+        output = wrapped({"x": 1})
+        assert output == {"out": 2}
+
+
+def test_l2_provider_error_is_logged():
+    """Verify provider errors surface through the logging module so
+    operators can monitor degraded validation health."""
+    import logging
+
+    from lattice_langgraph.breaker import validate_l2
+
+    with patch.dict("sys.modules", {"openai": None}):
+        with patch.object(logging.getLogger("lattice_langgraph.breaker"), "warning") as mock_warning:
+            result = validate_l2({"q": 1}, {"a": 2}, openai_api_key="x")
+            assert result.passed is False
+            assert mock_warning.called
+
+
 def test_audit_logger_multiple_entries():
     with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as f:
         path = f.name
