@@ -1,5 +1,6 @@
 import { StateContract } from '../contract/types.js';
 import { createContract } from '../contract/factory.js';
+import { canonicalize } from '../util/canonical.js';
 
 /**
  * Conflict resolution strategy for the ConsensusReducer.
@@ -333,17 +334,22 @@ export class ConsensusReducer<TOut = unknown> {
 
   /**
    * Serialize a value for comparison.
+   *
+   * Delegates to the shared canonical-stringify utility so that:
+   *  - the caller's array is not mutated (fix for #11)
+   *  - keys are sorted at every depth, not just the top level (fix for #12)
+   *  - the same canonicalization rules are used by the audit-log hash chain
+   *
+   * Strings retain their previous "raw" treatment (so that two strings only
+   * compare equal if they're byte-identical — JSON-quoting them would not
+   * change that, but we keep the prior shape to avoid churn in the
+   * uniqueValues map keys used by the conflict-resolution logic).
    */
   private serializeValue(value: unknown): string {
     if (value === null) return 'null';
     if (value === undefined) return 'undefined';
     if (typeof value === 'string') return value;
     if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-    if (Array.isArray(value)) return JSON.stringify(value.sort());
-    if (typeof value === 'object') {
-      const entries = Object.entries(value as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b));
-      return JSON.stringify(Object.fromEntries(entries));
-    }
-    return String(value);
+    return canonicalize(value);
   }
 }

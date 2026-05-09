@@ -1,6 +1,7 @@
 import { SchemaValidator, ValidationResult as SchemaResult } from '../contract/validator.js';
 import { StateContract } from '../contract/types.js';
 import { CircuitBreaker } from './breaker.js';
+import { canonicalize, CanonicalMemo } from '../util/canonical.js';
 import {
   TieredCircuitBreakerConfig,
   ValidationResult,
@@ -8,6 +9,59 @@ import {
   EmbeddingProvider,
   JudgeProvider,
 } from './types.js';
+
+/**
+ * Per-`validate()`-call memo of canonicalized payload strings. Built once
+ * at the top of {@link TieredCircuitBreaker.validate} and threaded through
+ * to L2/L3 so the same payload is canonicalized at most once per step
+ * (fix for #17 — eliminates the 5x stringify amplification across
+ * reducer/L2/L3/audit).
+ */
+interface PayloadCanon {
+  /** Canonical string for `contract.inputs.payload`. Computed lazily. */
+  inputs(): string;
+  /** Canonical string for `contract.outputs.payload`. Computed lazily. */
+  outputs(): string;
+  /** Canonical string for `{ decisions, constraints, assumptions }` (L3 context). */
+  context(): string;
+  /**
+   * The shared memo. Exposed so the same WeakMap is reused across all three
+   * canonicalization calls — nested objects shared between inputs/outputs/
+   * context are emitted only once.
+   */
+  readonly memo: CanonicalMemo;
+}
+
+function buildPayloadCanon(contract: StateContract): PayloadCanon {
+  const memo = new CanonicalMemo();
+  let inputsCache: string | undefined;
+  let outputsCache: string | undefined;
+  let contextCache: string | undefined;
+  return {
+    memo,
+    inputs(): string {
+      if (inputsCache === undefined) inputsCache = canonicalize(contract.inputs.payload, memo);
+      return inputsCache;
+    },
+    outputs(): string {
+      if (outputsCache === undefined) outputsCache = canonicalize(contract.outputs.payload, memo);
+      return outputsCache;
+    },
+    context(): string {
+      if (contextCache === undefined) {
+        contextCache = canonicalize(
+          {
+            decisions: contract.decisions,
+            constraints: contract.constraints,
+            assumptions: contract.assumptions,
+          },
+          memo,
+        );
+      }
+      return contextCache;
+    },
+  };
+}
 
 /**
  * Tiered Circuit Breaker that validates State Contracts through
@@ -130,19 +184,26 @@ export class TieredCircuitBreaker {
     }
 
     const isAuto = this.config.tier === 'auto';
+    // Canonicalize each payload at most once per validate() call. Shared
+    // between L2 (embedding inputs) and L3 (judge inputs) so a single
+    // tiered-breaker step never canonicalizes the same payload twice.
+    const canon = buildPayloadCanon(contract);
 
     if (isAuto) {
-      return this.validateAuto(contract);
+      return this.validateAuto(contract, canon);
     }
 
-    return this.validateManual(contract);
+    return this.validateManual(contract, canon);
   }
 
   /**
    * Auto mode: L1 always, L2 if available, L3 only on escalation.
    * Default latency: <200ms (L1+L2), 1-3s only when L3 escalates.
    */
-  private async validateAuto(contract: StateContract): Promise<ValidationResult> {
+  private async validateAuto(
+    contract: StateContract,
+    canon: PayloadCanon,
+  ): Promise<ValidationResult> {
     const start = Date.now();
     let lastResult: ValidationResult | null = null;
 
@@ -157,7 +218,7 @@ export class TieredCircuitBreaker {
     // L2: Run if provider is available
     let l2Similarity: number | null = null;
     if (this.embeddingProvider) {
-      const l2 = await this.validateL2(contract, Date.now());
+      const l2 = await this.validateL2(contract, Date.now(), canon);
       lastResult = l2;
       if (!l2.passed) {
         this.breaker.recordFailure();
@@ -172,7 +233,7 @@ export class TieredCircuitBreaker {
     const needsEscalation = l2Similarity !== null && l2Similarity < this.config.l3EscalationThreshold;
 
     if ((needsEscalation || isHighRisk) && this.judgeProvider) {
-      const l3 = await this.validateL3(contract, Date.now());
+      const l3 = await this.validateL3(contract, Date.now(), canon);
       lastResult = l3;
       if (!l3.passed) {
         this.breaker.recordFailure();
@@ -187,12 +248,15 @@ export class TieredCircuitBreaker {
   /**
    * Manual mode: Run explicitly configured tiers in sequence.
    */
-  private async validateManual(contract: StateContract): Promise<ValidationResult> {
+  private async validateManual(
+    contract: StateContract,
+    canon: PayloadCanon,
+  ): Promise<ValidationResult> {
     const enabledTiers = this.getEnabledTiers();
     let lastResult: ValidationResult | null = null;
 
     for (const tier of enabledTiers) {
-      const result = await this.validateTier(contract, tier);
+      const result = await this.validateTier(contract, tier, canon);
       lastResult = result;
       if (!result.passed) {
         this.breaker.recordFailure();
@@ -222,6 +286,7 @@ export class TieredCircuitBreaker {
   private async validateTier(
     contract: StateContract,
     tier: ValidationTier,
+    canon: PayloadCanon,
   ): Promise<ValidationResult> {
     const start = Date.now();
 
@@ -229,9 +294,9 @@ export class TieredCircuitBreaker {
       case 'L1':
         return this.validateL1(contract, start);
       case 'L2':
-        return this.validateL2(contract, start);
+        return this.validateL2(contract, start, canon);
       case 'L3':
-        return this.validateL3(contract, start);
+        return this.validateL3(contract, start, canon);
     }
   }
 
@@ -261,6 +326,7 @@ export class TieredCircuitBreaker {
   private async validateL2(
     contract: StateContract,
     start: number,
+    canon: PayloadCanon,
   ): Promise<ValidationResult> {
     if (!this.embeddingProvider) {
       return {
@@ -272,8 +338,12 @@ export class TieredCircuitBreaker {
     }
 
     try {
-      const inputText = JSON.stringify(contract.inputs.payload);
-      const outputText = JSON.stringify(contract.outputs.payload);
+      // Canonicalize once per validate() step (memoized in `canon`); reused
+      // by L3 below if escalation triggers. Replaces a non-deterministic
+      // JSON.stringify (insertion-order-sensitive) with a stable canonical
+      // form so semantic similarity is reproducible across processes.
+      const inputText = canon.inputs();
+      const outputText = canon.outputs();
 
       const [inputVec, outputVec] = await Promise.all([
         this.embeddingProvider.embed(inputText),
@@ -307,6 +377,7 @@ export class TieredCircuitBreaker {
   private async validateL3(
     contract: StateContract,
     start: number,
+    canon: PayloadCanon,
   ): Promise<ValidationResult> {
     if (!this.judgeProvider) {
       return {
@@ -318,13 +389,12 @@ export class TieredCircuitBreaker {
     }
 
     try {
-      const task = JSON.stringify(contract.inputs.payload);
-      const output = JSON.stringify(contract.outputs.payload);
-      const context = JSON.stringify({
-        decisions: contract.decisions,
-        constraints: contract.constraints,
-        assumptions: contract.assumptions,
-      });
+      // Reuses memoized canonical forms from `canon`. If L2 already ran in
+      // this validate() step, inputs/outputs are returned from the per-step
+      // cache and not re-stringified.
+      const task = canon.inputs();
+      const output = canon.outputs();
+      const context = canon.context();
 
       const judgeResult = await this.judgeProvider.judge(task, output, context);
       const durationMs = Date.now() - start;

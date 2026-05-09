@@ -8,6 +8,7 @@ import {
   BudgetRecord,
   CURRENT_SCHEMA_VERSION,
 } from './types.js';
+import { canonicalize } from '../util/canonical.js';
 
 /** Options for creating a State Contract */
 export interface CreateContractOptions<TIn, TOut> {
@@ -99,12 +100,16 @@ export function createContract<TIn = unknown, TOut = unknown>(
 }
 
 /**
- * Estimate the byte size of a value by serializing to JSON.
- * Used for the contentLength field in ContractPayload.
+ * Estimate the byte size of a value by serializing to canonical JSON.
+ *
+ * Uses {@link canonicalize} (key-sorted, single-pass) rather than
+ * `JSON.stringify` so that two semantically-equal payloads with different
+ * insertion orders report the same `contentLength` — and so this stringify
+ * pass shares a code path with downstream hashers (issue #17).
  */
 function estimateByteSize(value: unknown): number {
   try {
-    return new TextEncoder().encode(JSON.stringify(value)).length;
+    return new TextEncoder().encode(canonicalize(value)).length;
   } catch {
     return 0;
   }

@@ -127,3 +127,6 @@ export type {
   ComplianceRole,
   CompliancePermission,
 } from './compliance/rbac.js';
+
+// Canonical JSON serialization (shared utility for hashing / determinism)
+export { canonicalize, CanonicalMemo } from './util/canonical.js';

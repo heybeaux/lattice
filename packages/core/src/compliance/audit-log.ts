@@ -16,6 +16,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as readline from 'readline';
 import { Readable } from 'stream';
+import { canonicalize } from '../util/canonical.js';
 
 /**
  * Configuration for the compliance audit log.
@@ -112,8 +113,16 @@ export class AuditLogIntegrityError extends Error {
 /**
  * Recursively sort all object keys for deterministic JSON serialization.
  *
- * NOTE: a separate canonicalization helper is owned by another agent. Until
- * that lands, this local copy preserves the existing on-disk hash format.
+ * Returns a fresh object/array graph with keys sorted at every depth — the
+ * input is not mutated. This is preserved as a thin compatibility shim so
+ * that any caller still relying on the pre-`canonicalize` shape continues to
+ * work; new code should call {@link canonicalize} directly to skip the
+ * intermediate object allocation.
+ *
+ * The canonical wire format (the JSON string consumed by {@link computeHash})
+ * is byte-identical to what `JSON.stringify(sortObjectKeys(x))` would have
+ * produced for plain JSON-serializable inputs, so the on-disk hash chain is
+ * unaffected.
  */
 function sortObjectKeys(obj: unknown): unknown {
   if (obj === null || typeof obj !== 'object') return obj;
@@ -127,11 +136,17 @@ function sortObjectKeys(obj: unknown): unknown {
 
 /**
  * Compute SHA-256 hash of a JSON-serializable object.
- * Keys are sorted recursively for deterministic output.
+ *
+ * Keys are sorted recursively for deterministic output. Uses the shared
+ * single-pass {@link canonicalize} emitter so we do not allocate an
+ * intermediate fully-sorted object graph (fix for #17). The resulting
+ * hash bytes are unchanged from the previous
+ * `JSON.stringify(sortObjectKeys(data))` formulation, preserving the on-disk
+ * audit-log chain format.
  */
 function computeHash(data: unknown, algorithm: 'sha256' | 'sha512' = 'sha256'): string {
   const hash = crypto.createHash(algorithm);
-  hash.update(JSON.stringify(sortObjectKeys(data)));
+  hash.update(canonicalize(data));
   return hash.digest('hex');
 }
 
