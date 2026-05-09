@@ -17,10 +17,19 @@
  */
 
 import { OpenAI } from 'openai';
-import type { EmbeddingProvider, JudgeProvider, JudgeResult } from '@heybeaux/lattice-core';
+import {
+  TokenBucket,
+  type EmbeddingProvider,
+  type JudgeProvider,
+  type JudgeResult,
+} from '@heybeaux/lattice-core';
 
 /**
  * Configuration for the OpenAI embedding provider.
+ *
+ * Issue #19 (H12): the provider exposes a batched entrypoint (`embedBatch`),
+ * an in-memory LRU cache, and a token-bucket rate limiter so the L2 path
+ * does not hammer the embeddings API on every contract validation.
  */
 export interface OpenAIEmbeddingConfig {
   /** OpenAI API key (default: process.env.OPENAI_API_KEY) */
@@ -29,6 +38,79 @@ export interface OpenAIEmbeddingConfig {
   model?: string;
   /** Dimensions for the embedding (optional, model-dependent) */
   dimensions?: number;
+  /**
+   * Max entries in the in-memory LRU cache keyed by canonical input.
+   * Embeddings are deterministic per (model, input) so no TTL is needed.
+   * Set to 0 to disable caching. Defaults to 1024.
+   */
+  cacheSize?: number;
+  /**
+   * Outbound request rate limit. Each `embed` call counts as one request;
+   * `embedBatch` counts as one request regardless of array size since
+   * OpenAI's `input: [...]` form is a single HTTP call. Defaults to
+   * 60 requests per minute. Set to `false` to disable.
+   */
+  rateLimit?:
+    | false
+    | {
+        /** Requests per `intervalMs` (default 60). */
+        ratePerInterval: number;
+        /** Refill window in ms (default 60_000 = 1 minute). */
+        intervalMs?: number;
+      };
+  /**
+   * Inject a pre-built OpenAI client. Used by tests to attach mocks; in
+   * production callers can leave this unset and let us construct the
+   * client from `apiKey`.
+   */
+  client?: Pick<OpenAI, 'embeddings'>;
+}
+
+/**
+ * Tiny LRU keyed by string. We re-insert on read so the most-recent access
+ * sits at the tail of the Map; the head is then the eviction candidate.
+ * `Map` already preserves insertion order in JS, so we can leverage that
+ * instead of a hand-rolled doubly-linked list.
+ *
+ * Not exported — implementation detail. The cache lives for the lifetime
+ * of the provider instance and is intentionally process-local.
+ */
+class LRU<V> {
+  private readonly max: number;
+  private readonly map = new Map<string, V>();
+
+  constructor(max: number) {
+    this.max = max;
+  }
+
+  get(key: string): V | undefined {
+    if (this.max <= 0) return undefined;
+    const v = this.map.get(key);
+    if (v === undefined) return undefined;
+    // Move-to-tail: delete + re-set keeps insertion order = LRU order.
+    this.map.delete(key);
+    this.map.set(key, v);
+    return v;
+  }
+
+  set(key: string, value: V): void {
+    if (this.max <= 0) return;
+    if (this.map.has(key)) {
+      this.map.delete(key);
+    } else if (this.map.size >= this.max) {
+      // Evict the oldest entry (head of insertion order).
+      const oldestKey = this.map.keys().next().value;
+      if (oldestKey !== undefined) {
+        this.map.delete(oldestKey);
+      }
+    }
+    this.map.set(key, value);
+  }
+
+  /** Number of entries currently cached. Exposed for tests/observability. */
+  size(): number {
+    return this.map.size;
+  }
 }
 
 /**
@@ -36,26 +118,108 @@ export interface OpenAIEmbeddingConfig {
  *
  * Uses `text-embedding-3-small` by default (1536 dimensions, cost-efficient).
  *
+ * Performance hardening (issue #19, H12):
+ *  - `embedBatch(texts)` issues a SINGLE HTTP call to OpenAI with
+ *    `input: [...]`, halving round-trips on the L2 hot path.
+ *  - In-memory LRU cache (default 1024 entries) — same payload validated
+ *    twice in a session is served from memory. Embeddings are deterministic
+ *    per (model, input) so no TTL is required.
+ *  - Token-bucket rate limiter (default 60 req/min) — protects the provider
+ *    from runaway L2 loops and avoids triggering 429s under burst load.
+ *
  * @param config - OpenAI embedding configuration
  * @returns EmbeddingProvider that can be injected into TieredCircuitBreaker
  */
 export function createOpenAIEmbeddingProvider(
   config?: OpenAIEmbeddingConfig,
 ): EmbeddingProvider {
-  const client = new OpenAI({
-    apiKey: config?.apiKey ?? process.env.OPENAI_API_KEY,
-  });
+  const client =
+    config?.client ??
+    new OpenAI({
+      apiKey: config?.apiKey ?? process.env.OPENAI_API_KEY,
+    });
   const model = config?.model ?? 'text-embedding-3-small';
   const dimensions = config?.dimensions;
+  const cache = new LRU<number[]>(config?.cacheSize ?? 1024);
+
+  // Cache key includes the model + dimensions so an instance reconfigured to
+  // a different model never returns a stale-shape vector. (Different
+  // provider instances have separate caches; this is just defense in depth.)
+  const cacheKey = (text: string): string =>
+    `${model}:${dimensions ?? '_'}:${text}`;
+
+  const limiter =
+    config?.rateLimit === false
+      ? null
+      : new TokenBucket({
+          ratePerInterval: config?.rateLimit?.ratePerInterval ?? 60,
+          intervalMs: config?.rateLimit?.intervalMs ?? 60_000,
+        });
+
+  /**
+   * Helper: actually call OpenAI for a list of inputs the cache could not
+   * serve. One HTTP request regardless of `inputs.length`. Returns vectors
+   * in the same order as `inputs`.
+   */
+  const callOpenAI = async (inputs: string[]): Promise<number[][]> => {
+    if (limiter) await limiter.acquire(1);
+    const response = await client.embeddings.create({
+      model,
+      input: inputs.length === 1 ? inputs[0] : inputs,
+      ...(dimensions ? { dimensions } : {}),
+    });
+    // OpenAI guarantees `data` is returned in the same order as the input
+    // array. We map index→embedding here so the caller can splice cache
+    // hits back in by position.
+    return response.data.map((d) => d.embedding);
+  };
 
   return {
     async embed(text: string): Promise<number[]> {
-      const response = await client.embeddings.create({
-        model,
-        input: text,
-        ...(dimensions ? { dimensions } : {}),
+      const key = cacheKey(text);
+      const cached = cache.get(key);
+      if (cached) return cached;
+
+      const [vec] = await callOpenAI([text]);
+      cache.set(key, vec);
+      return vec;
+    },
+
+    async embedBatch(texts: string[]): Promise<number[][]> {
+      // Resolve cache hits up-front. Only the misses go to the provider —
+      // and they all go in a single batched call.
+      const out: (number[] | undefined)[] = new Array(texts.length);
+      const missIdx: number[] = [];
+      const missTexts: string[] = [];
+
+      for (let i = 0; i < texts.length; i++) {
+        const hit = cache.get(cacheKey(texts[i]));
+        if (hit) {
+          out[i] = hit;
+        } else {
+          missIdx.push(i);
+          missTexts.push(texts[i]);
+        }
+      }
+
+      if (missTexts.length > 0) {
+        const fetched = await callOpenAI(missTexts);
+        for (let j = 0; j < missTexts.length; j++) {
+          const i = missIdx[j];
+          out[i] = fetched[j];
+          cache.set(cacheKey(missTexts[j]), fetched[j]);
+        }
+      }
+
+      // Every slot is now populated — assert for the type system.
+      return out.map((v, i) => {
+        if (!v) {
+          throw new Error(
+            `embedBatch: slot ${i} unfilled (cache + fetch race?)`,
+          );
+        }
+        return v;
       });
-      return response.data[0].embedding;
     },
 
     similarity(a: number[], b: number[]): number {

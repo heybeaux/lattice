@@ -378,13 +378,33 @@ export class TieredCircuitBreaker {
       // by L3 below if escalation triggers. Replaces a non-deterministic
       // JSON.stringify (insertion-order-sensitive) with a stable canonical
       // form so semantic similarity is reproducible across processes.
+      // The canon already reflects provider-redaction, so the strings here
+      // are safe to ship to a remote embedding provider (issue #6).
       const inputText = canon.inputs();
       const outputText = canon.outputs();
 
-      const [inputVec, outputVec] = await Promise.all([
-        this.embeddingProvider.embed(inputText),
-        this.embeddingProvider.embed(outputText),
-      ]);
+      // Issue #19 (H12): prefer a single batched call when the provider
+      // supports it. Batching halves the L2 round-trip count and lets
+      // providers (e.g., OpenAI's `input: [a, b]` form) amortize fixed
+      // per-request overhead. Fall back to two parallel `embed` calls for
+      // older providers that did not implement `embedBatch`.
+      let inputVec: number[];
+      let outputVec: number[];
+      if (typeof this.embeddingProvider.embedBatch === 'function') {
+        const vecs = await this.embeddingProvider.embedBatch([inputText, outputText]);
+        if (!Array.isArray(vecs) || vecs.length !== 2) {
+          throw new Error(
+            `EmbeddingProvider.embedBatch returned ${Array.isArray(vecs) ? vecs.length : 'non-array'} vectors; expected 2`,
+          );
+        }
+        inputVec = vecs[0];
+        outputVec = vecs[1];
+      } else {
+        [inputVec, outputVec] = await Promise.all([
+          this.embeddingProvider.embed(inputText),
+          this.embeddingProvider.embed(outputText),
+        ]);
+      }
 
       const similarity = this.embeddingProvider.similarity(inputVec, outputVec);
       const durationMs = Date.now() - start;

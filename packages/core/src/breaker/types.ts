@@ -101,11 +101,26 @@ export interface ValidationResult {
 /**
  * Provider interface for L2 embedding similarity checks.
  * User must inject an implementation — Lattice ships none by default.
+ *
+ * Performance contract (issue #19):
+ * - When `embedBatch` is implemented, the breaker batches the two L2
+ *   embedding calls (expected + actual) into a single provider request.
+ *   This halves round-trips and is the recommended path for any provider
+ *   whose backend supports array inputs (e.g., OpenAI's embeddings API).
+ * - When `embedBatch` is absent, the breaker falls back to two parallel
+ *   `embed` calls — preserving the original semantics for older providers.
  */
 export interface EmbeddingProvider {
-  /** Get embedding vector for a string */
+  /** Get embedding vector for a single string. */
   embed(text: string): Promise<number[]>;
-  /** Compute cosine similarity between two vectors */
+  /**
+   * Optional: get embedding vectors for multiple strings in a SINGLE
+   * provider request. Implementations MUST return one vector per input
+   * in the same order. The breaker prefers this entrypoint when present
+   * to avoid the 2x round-trip + cost on every L2 step (issue #19).
+   */
+  embedBatch?(texts: string[]): Promise<number[][]>;
+  /** Compute cosine similarity between two vectors. */
   similarity(a: number[], b: number[]): number;
 }
 

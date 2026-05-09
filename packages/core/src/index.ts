@@ -130,3 +130,8 @@ export type {
 
 // Canonical JSON serialization (shared utility for hashing / determinism)
 export { canonicalize, CanonicalMemo } from './util/canonical.js';
+
+// Token-bucket rate limiter (issue #19) — used by providers to throttle
+// outbound calls (e.g., embedding APIs) without taking a network dependency.
+export { TokenBucket } from './util/rate-limit.js';
+export type { TokenBucketOptions } from './util/rate-limit.js';
