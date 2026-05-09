@@ -4,8 +4,11 @@
 
 [![npm](https://img.shields.io/npm/v/@heybeaux/lattice-core.svg)](https://www.npmjs.com/package/@heybeaux/lattice-core)
 [![npm](https://img.shields.io/npm/v/@heybeaux/lattice-provider-openai.svg)](https://www.npmjs.com/package/@heybeaux/lattice-provider-openai)
+[![npm](https://img.shields.io/npm/v/@heybeaux/lattice-adapter-mastra.svg)](https://www.npmjs.com/package/@heybeaux/lattice-adapter-mastra)
+[![PyPI](https://img.shields.io/pypi/v/lattice-langgraph.svg)](https://pypi.org/project/lattice-langgraph/)
+[![PyPI](https://img.shields.io/pypi/v/lattice-crewai.svg)](https://pypi.org/project/lattice-crewai/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Benchmark](https://img.shields.io/badge/benchmark-85%25_accuracy-blue)](https://github.com/heybeaux/lattice/tree/main/benchmark)
+[![Benchmark](https://img.shields.io/badge/benchmark-93%25_pass_rate-green)](https://github.com/heybeaux/lattice/tree/main/benchmark)
 
 > Like threading libraries for concurrent programming — but for AI agents.
 
@@ -15,10 +18,11 @@ Multi-agent AI systems fail at high rates due to **structural coordination failu
 
 | Package | Version | Status | Notes |
 |---------|---------|--------|-------|
-| `@heybeaux/lattice-core` | v0.1.0 | ✅ Published | State Contracts, Circuit Breakers, Pipeline, Redaction, Events, ConsensusReducer, parallel()/join() |
-| `@heybeaux/lattice-provider-openai` | v0.1.0 | ✅ Published | L2 embeddings + L3 LLM-as-judge via OpenAI |
-| `@heybeaux/lattice-adapter-mastra` | v0.1.0 | ✅ Published | wrapMastraStep() + createLatticePipeline() |
-| `lattice-langgraph` | — | ✅ Merged | Python — wrap_node() + LatticeMiddleware, 13 tests |
+| `@heybeaux/lattice-core` | v0.2.0 | ✅ Published | State Contracts, Circuit Breakers, Pipeline, Redaction, Events, Compliance, ConsensusReducer |
+| `@heybeaux/lattice-provider-openai` | v0.2.0 | ✅ Published | L2 embeddings + L3 LLM-as-judge via OpenAI |
+| `@heybeaux/lattice-adapter-mastra` | v0.2.0 | ✅ Published | wrapMastraStep() + createLatticePipeline() |
+| `lattice-langgraph` | 0.2.1 | ✅ Published | [PyPI](https://pypi.org/project/lattice-langgraph/) — wrap_node() + LatticeMiddleware, 13 tests |
+| `lattice-crewai` | 0.2.1 | ✅ Published | [PyPI](https://pypi.org/project/lattice-crewai/) — wrap_task() + LatticeCrewMiddleware, 15 tests |
 
 ## Real Benchmark Results (May 8, 2026)
 

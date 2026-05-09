@@ -112,24 +112,23 @@ export class AuditLogIntegrityError extends Error {
 
 /**
  * Recursively sort all object keys for deterministic JSON serialization.
- *
- * Returns a fresh object/array graph with keys sorted at every depth — the
- * input is not mutated. This is preserved as a thin compatibility shim so
- * that any caller still relying on the pre-`canonicalize` shape continues to
- * work; new code should call {@link canonicalize} directly to skip the
- * intermediate object allocation.
- *
- * The canonical wire format (the JSON string consumed by {@link computeHash})
- * is byte-identical to what `JSON.stringify(sortObjectKeys(x))` would have
- * produced for plain JSON-serializable inputs, so the on-disk hash chain is
- * unaffected.
+ * Uses Object.create(null) to prevent __proto__ prototype pollution attacks.
+ * Rejects __proto__, prototype, and constructor keys to prevent hash bypass.
  */
+const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+
 function sortObjectKeys(obj: unknown): unknown {
   if (obj === null || typeof obj !== 'object') return obj;
   if (Array.isArray(obj)) return obj.map(sortObjectKeys);
-  const sorted: Record<string, unknown> = {};
+  // Use Object.create(null) to prevent __proto__ attacks
+  const sorted = Object.create(null);
   for (const key of Object.keys(obj as Record<string, unknown>).sort()) {
-    sorted[key] = sortObjectKeys((obj as Record<string, unknown>)[key]);
+    if (FORBIDDEN_KEYS.has(key)) {
+      // Encode forbidden keys as safe property names to include in hash
+      sorted[`_forbidden_${key}`] = sortObjectKeys((obj as Record<string, unknown>)[key]);
+    } else {
+      sorted[key] = sortObjectKeys((obj as Record<string, unknown>)[key]);
+    }
   }
   return sorted;
 }
@@ -558,8 +557,6 @@ export class ComplianceAuditLog {
 
     try {
       // Re-read tail under lock so concurrent writers see each other's last hash.
-      // (Synchronous to keep the public API unchanged; the read is a single
-      // small fd-positioned read, not a full-file load.)
       const tail = readChainTailSync(this.config.logPath, this.config.algorithm);
       if (tail.partialTailBytes > 0) {
         throw new AuditLogIntegrityError(
@@ -583,8 +580,7 @@ export class ComplianceAuditLog {
       const line = JSON.stringify(entry) + '\n';
 
       // Crash-safe append: O_APPEND ensures all writers atomically extend the
-      // file under POSIX (writes <= PIPE_BUF are atomic; we use a single
-      // write() call). fdatasync forces the kernel buffer to disk.
+      // file under POSIX. fdatasync forces the kernel buffer to disk.
       const fd = fs.openSync(this.config.logPath, fs.constants.O_APPEND | fs.constants.O_WRONLY | fs.constants.O_CREAT, 0o600);
       try {
         fs.writeSync(fd, line);
@@ -593,7 +589,6 @@ export class ComplianceAuditLog {
         fs.closeSync(fd);
       }
 
-      // Update in-memory cursor.
       this.currentSequence = sequence;
       this.lastHash = contentHash;
 
@@ -638,10 +633,6 @@ export class ComplianceAuditLog {
    * rewritten — chain integrity is preserved end-to-end and `verify()`
    * continues to pass.
    *
-   * `exportForCompliance()` and `iterateLiveEntries()` filter expired
-   * entries by reading this sidecar. To reclaim disk space, operate on the
-   * file out-of-band after archiving (no re-chain is supported).
-   *
    * @throws AuditLogIntegrityError if the chain currently fails verification
    * (refuses to enforce retention over a corrupt chain).
    */
@@ -665,7 +656,6 @@ export class ComplianceAuditLog {
 
       const cutoffDate = new Date(Date.now() - this.config.retentionDays * 24 * 60 * 60 * 1000);
 
-      // Streaming pass: find the last entry whose timestamp <= cutoff.
       let cutoffEntry: AuditLogEntry | null = null;
       let total = 0;
       for (const line of iterateAuditLogSync(this.config.logPath)) {
@@ -678,7 +668,6 @@ export class ComplianceAuditLog {
       }
 
       if (!cutoffEntry) {
-        // Nothing aged out — leave any prior cutoff in place.
         const prior = readRetentionCutoff(this.config.logPath);
         return { removed: prior?.cutoffSequence ?? 0, remaining: total - (prior?.cutoffSequence ?? 0) };
       }

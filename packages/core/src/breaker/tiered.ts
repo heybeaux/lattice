@@ -378,8 +378,10 @@ export class TieredCircuitBreaker {
       // by L3 below if escalation triggers. Replaces a non-deterministic
       // JSON.stringify (insertion-order-sensitive) with a stable canonical
       // form so semantic similarity is reproducible across processes.
-      // The canon already reflects provider-redaction, so the strings here
-      // are safe to ship to a remote embedding provider (issue #6).
+      // The canon already reflects provider-redaction (tree-walking
+      // redactContract — supersedes the SENSITIVE_KEYS approach from the
+      // parallel main-branch fix), so the strings here are safe to ship
+      // to a remote embedding provider (issue #6 / FINDING-001).
       const inputText = canon.inputs();
       const outputText = canon.outputs();
 
@@ -447,7 +449,9 @@ export class TieredCircuitBreaker {
     try {
       // Reuses memoized canonical forms from `canon`. If L2 already ran in
       // this validate() step, inputs/outputs are returned from the per-step
-      // cache and not re-stringified.
+      // cache and not re-stringified. The canon was built from the
+      // provider-redacted contract (see buildProviderCanon), so secrets
+      // never reach the judge provider.
       const task = canon.inputs();
       const output = canon.outputs();
       const context = canon.context();

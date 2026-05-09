@@ -7,6 +7,7 @@ import {
   CircuitBreaker,
 } from '../src/index.js';
 import type { EmbeddingProvider, JudgeProvider } from '../src/index.js';
+import type { EmbeddingProvider, JudgeProvider } from '../src/index.js';
 
 // ─── TieredCircuitBreaker: Auto Mode ───
 
@@ -177,6 +178,66 @@ describe('TieredCircuitBreaker: Auto Mode', () => {
     const result = await breaker.validate(contract);
     expect(result.passed).toBe(true);
     expect(result.tier).toBe('L3');
+  });
+
+  it('redacts secrets before sending to L2 provider', async () => {
+    const seenTexts: string[] = [];
+    const mockEmbedding: EmbeddingProvider = {
+      embed: async (text) => {
+        seenTexts.push(text);
+        return [1, 0, 0];
+      },
+      similarity: () => 1.0,
+    };
+
+    const breaker = new TieredCircuitBreaker({ tier: 'L1+L2' });
+    breaker.setEmbeddingProvider(mockEmbedding);
+
+    const contract = createContract({
+      fromAgent: 'test',
+      inputs: { query: 'hello', apiKey: 'sk-live-secret-12345' },
+      outputs: { result: 'world', password: 'hunter2' },
+      budget: { tokensUsed: 0, callsMade: 0, wallClockMs: 10 },
+    });
+
+    const result = await breaker.validate(contract);
+    expect(result.passed).toBe(true);
+
+    // Verify secrets were redacted in provider calls
+    for (const text of seenTexts) {
+      expect(text).not.toContain('sk-live-secret-12345');
+      expect(text).not.toContain('hunter2');
+      expect(text).toContain('[REDACTED]');
+    }
+  });
+
+  it('redacts secrets before sending to L3 provider', async () => {
+    const seenTexts: string[] = [];
+    const mockJudge: JudgeProvider = {
+      judge: async (task, output, context) => {
+        seenTexts.push(task, output);
+        return { verdict: 'pass', confidence: 0.95 };
+      },
+    };
+
+    const breaker = new TieredCircuitBreaker({ tier: 'L1+L3' });
+    breaker.setJudgeProvider(mockJudge);
+
+    const contract = createContract({
+      fromAgent: 'test',
+      inputs: { apiKey: 'sk-prod-secret' },
+      outputs: { secretKey: 'ghp_abc123' },
+      budget: { tokensUsed: 0, callsMade: 0, wallClockMs: 10 },
+    });
+
+    const result = await breaker.validate(contract);
+    expect(result.passed).toBe(true);
+
+    // Verify secrets were redacted from inputs and outputs sent to judge
+    expect(seenTexts[0]).not.toContain('sk-prod-secret');
+    expect(seenTexts[0]).toContain('[REDACTED]');
+    expect(seenTexts[1]).not.toContain('ghp_abc123');
+    expect(seenTexts[1]).toContain('[REDACTED]');
   });
 });
 
