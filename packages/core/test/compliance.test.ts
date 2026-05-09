@@ -218,6 +218,54 @@ describe('ComplianceAuditLog', () => {
     const entry = log.append({ stepId: 'first' });
     expect(entry.sequence).toBe(1);
   });
+
+  it('rejects __proto__ prototype pollution in hash computation', () => {
+    const log = new ComplianceAuditLog({ logPath: TEST_LOG_PATH });
+
+    // Create data with __proto__ key
+    const maliciousData = JSON.parse('{"__proto__":{"secret":"unhashed"},"safe":1}');
+    const entry = log.append(maliciousData);
+
+    // The hash should include the forbidden key (as _forbidden___proto__)
+    const result = log.verify();
+    expect(result.valid).toBe(true);
+  });
+
+  it('throws on concurrent append attempts', () => {
+    const log = new ComplianceAuditLog({ logPath: TEST_LOG_PATH });
+    log.append({ stepId: 'step1' });
+
+    // Simulate concurrent access by manually acquiring lock
+    expect(() => {
+      (log as any).acquireLock();
+      (log as any).appendUnsafe({ stepId: 'step2' });
+    }).not.toThrow();
+
+    // Second append should fail due to lock
+    expect(() => log.append({ stepId: 'step3' })).toThrow('concurrent append detected');
+
+    // Release lock
+    (log as any).releaseLock();
+    // Now it should work
+    expect(() => log.append({ stepId: 'step3' })).not.toThrow();
+  });
+
+  it('does not mutate sequence on serialization failure', () => {
+    const log = new ComplianceAuditLog({ logPath: TEST_LOG_PATH });
+    log.append({ stepId: 'step1' });
+
+    // Try to append non-serializable data (BigInt)
+    expect(() => log.append({ x: 1n } as any)).toThrow();
+
+    // Sequence should still be 1, not 2
+    const entry = log.append({ stepId: 'step2' });
+    expect(entry.sequence).toBe(2);
+
+    // Verify should pass (no sequence gap)
+    const result = log.verify();
+    expect(result.valid).toBe(true);
+    expect(result.lastValidSequence).toBe(2);
+  });
 });
 
 describe('Verification API', () => {

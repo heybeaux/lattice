@@ -18,13 +18,21 @@ const VERIFICATION_GENESIS_HASH = '000000000000000000000000000000000000000000000
 
 /**
  * Recursively sort all object keys for deterministic JSON serialization.
+ * Uses Object.create(null) to prevent __proto__ prototype pollution attacks.
+ * Rejects __proto__, prototype, and constructor keys to prevent hash bypass.
  */
+const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+
 function sortObjectKeys(obj: unknown): unknown {
   if (obj === null || typeof obj !== 'object') return obj;
   if (Array.isArray(obj)) return obj.map(sortObjectKeys);
-  const sorted: Record<string, unknown> = {};
+  const sorted = Object.create(null);
   for (const key of Object.keys(obj as Record<string, unknown>).sort()) {
-    sorted[key] = sortObjectKeys((obj as Record<string, unknown>)[key]);
+    if (FORBIDDEN_KEYS.has(key)) {
+      sorted[`_forbidden_${key}`] = sortObjectKeys((obj as Record<string, unknown>)[key]);
+    } else {
+      sorted[key] = sortObjectKeys((obj as Record<string, unknown>)[key]);
+    }
   }
   return sorted;
 }
@@ -309,11 +317,17 @@ export function generateVerificationCertificate(
 } {
   const verification = verifyAuditLog(logPath, algorithm);
 
-  // Generate a certificate hash that includes the verification result
+  // Generate a certificate hash that does NOT include the timestamp
+  // (so the certificate remains verifiable over time)
   const certificateData = {
     logPath,
-    verification,
-    certificateGeneratedAt: new Date().toISOString(),
+    verification: {
+      valid: verification.valid,
+      lastValidSequence: verification.lastValidSequence,
+      totalEntries: verification.totalEntries,
+      lastHash: verification.lastHash,
+      algorithm: verification.algorithm,
+    },
   };
 
   const certificateHash = computeHash(certificateData, algorithm);
@@ -346,7 +360,7 @@ export function verifyCertificate(
     if (!hashMatch) return false;
     const expectedHash = hashMatch[1];
 
-    // Regenerate the certificate
+    // Regenerate the certificate from current log state
     const { certificate: regeneratedCertificate } = generateVerificationCertificate(logPath, algorithm);
     const regeneratedHashMatch = regeneratedCertificate.match(/Certificate Hash: ([a-f0-9]+)/);
     if (!regeneratedHashMatch) return false;

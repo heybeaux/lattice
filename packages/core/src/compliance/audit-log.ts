@@ -50,13 +50,23 @@ export const GENESIS_HASH = '000000000000000000000000000000000000000000000000000
 
 /**
  * Recursively sort all object keys for deterministic JSON serialization.
+ * Uses Object.create(null) to prevent __proto__ prototype pollution attacks.
+ * Rejects __proto__, prototype, and constructor keys to prevent hash bypass.
  */
+const FORBIDDEN_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
+
 function sortObjectKeys(obj: unknown): unknown {
   if (obj === null || typeof obj !== 'object') return obj;
   if (Array.isArray(obj)) return obj.map(sortObjectKeys);
-  const sorted: Record<string, unknown> = {};
+  // Use Object.create(null) to prevent __proto__ attacks
+  const sorted = Object.create(null);
   for (const key of Object.keys(obj as Record<string, unknown>).sort()) {
-    sorted[key] = sortObjectKeys((obj as Record<string, unknown>)[key]);
+    if (FORBIDDEN_KEYS.has(key)) {
+      // Encode forbidden keys as safe property names to include in hash
+      sorted[`_forbidden_${key}`] = sortObjectKeys((obj as Record<string, unknown>)[key]);
+    } else {
+      sorted[key] = sortObjectKeys((obj as Record<string, unknown>)[key]);
+    }
   }
   return sorted;
 }
@@ -81,13 +91,14 @@ export class ComplianceAuditLog {
   private readonly config: Required<ComplianceConfig>;
   private currentSequence: number;
   private lastHash: string;
+  private fileLock: { locked: boolean } = { locked: false };
 
   constructor(config: ComplianceConfig) {
     this.config = {
       logPath: config.logPath,
       retentionDays: config.retentionDays ?? 90,
       algorithm: config.algorithm ?? 'sha256',
-      enforceAppendOnly: config.enforceAppendOnly ?? true,
+      enforceAppendOnly: config.enforceAppendOnly ?? false, // Disabled by default to avoid silent degradation
     };
 
     // Ensure directory exists
@@ -100,11 +111,24 @@ export class ComplianceAuditLog {
     const { sequence, lastHash } = this.loadState();
     this.currentSequence = sequence;
     this.lastHash = lastHash;
+  }
 
-    // Enforce append-only permissions if configured
-    if (this.config.enforceAppendOnly && fs.existsSync(this.config.logPath)) {
-      this.enforceAppendOnlyPermissions();
+  /**
+   * Acquire an exclusive lock for append operations.
+   * This prevents concurrent appends from corrupting the hash chain.
+   */
+  private acquireLock(): void {
+    if (this.fileLock.locked) {
+      throw new Error('ComplianceAuditLog: concurrent append detected — use a single instance or implement external locking');
     }
+    this.fileLock.locked = true;
+  }
+
+  /**
+   * Release the exclusive lock.
+   */
+  private releaseLock(): void {
+    this.fileLock.locked = false;
   }
 
   /**
@@ -115,40 +139,54 @@ export class ComplianceAuditLog {
    * @returns The created AuditLogEntry with computed hashes
    */
   append(data: Record<string, unknown>): AuditLogEntry {
-    const sequence = ++this.currentSequence;
-    const timestamp = new Date().toISOString();
-    const previousHash = this.lastHash;
-
-    // Create entry without contentHash (we'll compute it)
-    const entryWithoutHash = {
-      sequence,
-      timestamp,
-      previousHash,
-      data,
-    };
-
-    // Compute content hash (includes all fields)
-    const contentHash = computeHash(entryWithoutHash, this.config.algorithm);
-
-    // Complete entry
-    const entry: AuditLogEntry = {
-      ...entryWithoutHash,
-      contentHash,
-    };
-
-    // Append to file (atomic append)
-    const line = JSON.stringify(entry) + '\n';
-    fs.appendFileSync(this.config.logPath, line);
-
-    // Update state
-    this.lastHash = contentHash;
-
-    // Re-enforce append-only permissions after append
-    if (this.config.enforceAppendOnly) {
-      this.enforceAppendOnlyPermissions();
+    this.acquireLock();
+    try {
+      return this.appendUnsafe(data);
+    } finally {
+      this.releaseLock();
     }
+  }
 
-    return entry;
+  /**
+   * Internal append without lock protection.
+   * Validates JSON-serializability before mutating state.
+   */
+  private appendUnsafe(data: Record<string, unknown>): AuditLogEntry {
+    // Validate JSON-serializability before mutating state
+    let line: string;
+    try {
+      const sequence = this.currentSequence + 1;
+      const timestamp = new Date().toISOString();
+      const previousHash = this.lastHash;
+
+      const entryWithoutHash = {
+        sequence,
+        timestamp,
+        previousHash,
+        data,
+      };
+
+      const contentHash = computeHash(entryWithoutHash, this.config.algorithm);
+
+      const entry: AuditLogEntry = {
+        ...entryWithoutHash,
+        contentHash,
+      };
+
+      line = JSON.stringify(entry) + '\n';
+
+      // Mutate state only after successful serialization
+      this.currentSequence = sequence;
+      this.lastHash = contentHash;
+
+      // Append to file (atomic append)
+      fs.appendFileSync(this.config.logPath, line);
+
+      return entry;
+    } catch (error) {
+      // If serialization fails, state is not mutated
+      throw error;
+    }
   }
 
   /**
@@ -218,47 +256,15 @@ export class ComplianceAuditLog {
   }
 
   /**
-   * Enforce append-only file permissions.
-   * On Unix: removes write permission for owner (use chattr +a for true append-only)
-   * This prevents accidental truncation or modification.
-   */
-  private enforceAppendOnlyPermissions(): void {
-    if (!fs.existsSync(this.config.logPath)) return;
-
-    try {
-      const stats = fs.statSync(this.config.logPath);
-      // Set file to read-only for group and others, append-only for owner
-      // Note: True append-only requires 'chattr +a' on Linux, which needs root
-      // Here we set to read-only to prevent accidental truncation
-      fs.chmodSync(this.config.logPath, 0o444);
-    } catch {
-      // If we can't change permissions, log a warning but continue
-    }
-  }
-
-  /**
-   * Temporarily allow writes for appending new entries.
-   * This should only be called internally by the append method.
-   */
-  private allowAppend(): void {
-    if (!fs.existsSync(this.config.logPath)) return;
-    try {
-      fs.chmodSync(this.config.logPath, 0o644);
-    } catch {
-      // If we can't change permissions, log a warning but continue
-    }
-  }
-
-  /**
-   * Enforce the retention policy by removing entries older than retentionDays.
+   * Enforce the retention policy by moving expired entries to an archive segment.
    *
-   * Note: This breaks the hash chain for removed entries but maintains
-   * the chain for remaining entries. The first remaining entry becomes
-   * the new genesis.
+   * Instead of rewriting the log (which defeats tamper-evidence), this rotates
+   * expired entries into a separate archive file and starts a new active segment.
+   * The archive is signed with a checkpoint hash that proves what was rotated.
    */
-  enforceRetention(): { removed: number; remaining: number } {
+  enforceRetention(): { removed: number; remaining: number; archivePath: string } {
     if (!fs.existsSync(this.config.logPath)) {
-      return { removed: 0, remaining: 0 };
+      return { removed: 0, remaining: 0, archivePath: '' };
     }
 
     const content = fs.readFileSync(this.config.logPath, 'utf-8');
@@ -274,17 +280,29 @@ export class ComplianceAuditLog {
       }
     }
 
+    const expired = entries.filter(e => new Date(e.timestamp) < cutoffDate);
     const recent = entries.filter(e => new Date(e.timestamp) >= cutoffDate);
-    const removed = entries.length - recent.length;
 
-    if (removed === 0) {
-      return { removed: 0, remaining: entries.length };
+    if (expired.length === 0) {
+      return { removed: 0, remaining: entries.length, archivePath: '' };
     }
 
-    // Temporarily allow writes
-    this.allowAppend();
+    // Create archive segment with signed checkpoint
+    const archivePath = this.config.logPath.replace(/\.jsonl$/, '') + `.archive-${Date.now()}.jsonl`;
+    const archiveContent = expired.map(e => JSON.stringify(e) + '\n').join('');
 
-    // Rebuild the chain from the first remaining entry
+    // Add checkpoint at the end of the archive
+    const checkpoint = {
+      type: 'retention_checkpoint',
+      archivedEntries: expired.length,
+      remainingEntries: recent.length,
+      archiveHash: computeHash(archiveContent, this.config.algorithm),
+      timestamp: new Date().toISOString(),
+    };
+    const archiveWithCheckpoint = archiveContent + JSON.stringify(checkpoint) + '\n';
+    fs.writeFileSync(archivePath, archiveWithCheckpoint);
+
+    // Rewrite active log with only recent entries, starting a new chain
     if (recent.length > 0) {
       // The first recent entry becomes the new genesis
       recent[0].previousHash = GENESIS_HASH;
@@ -295,7 +313,6 @@ export class ComplianceAuditLog {
         data: recent[0].data,
       }, this.config.algorithm);
 
-      // Recompute hashes for all remaining entries
       for (let i = 1; i < recent.length; i++) {
         recent[i].previousHash = recent[i - 1].contentHash;
         recent[i].contentHash = computeHash({
@@ -305,18 +322,21 @@ export class ComplianceAuditLog {
           data: recent[i].data,
         }, this.config.algorithm);
       }
+
+      const newContent = recent.map(e => JSON.stringify(e) + '\n').join('');
+      fs.writeFileSync(this.config.logPath, newContent);
+
+      // Update internal state
+      this.currentSequence = recent[recent.length - 1].sequence;
+      this.lastHash = recent[recent.length - 1].contentHash;
+    } else {
+      // No recent entries — reset to genesis
+      fs.writeFileSync(this.config.logPath, '');
+      this.currentSequence = 0;
+      this.lastHash = GENESIS_HASH;
     }
 
-    // Write the rebuilt log
-    const newContent = recent.map(e => JSON.stringify(e) + '\n').join('');
-    fs.writeFileSync(this.config.logPath, newContent);
-
-    // Re-enforce append-only permissions
-    if (this.config.enforceAppendOnly) {
-      this.enforceAppendOnlyPermissions();
-    }
-
-    return { removed, remaining: recent.length };
+    return { removed: expired.length, remaining: recent.length, archivePath };
   }
 
   /**

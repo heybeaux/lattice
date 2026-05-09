@@ -10,6 +10,32 @@ import {
 } from './types.js';
 
 /**
+ * Sensitive field patterns for redaction before provider calls.
+ */
+const SENSITIVE_KEYS = new Set([
+  'apiKey', 'api_key', 'password', 'passwd', 'secret', 'secretKey', 'secret_key',
+  'token', 'accessToken', 'access_token', 'authorization', 'auth',
+  'privateKey', 'private_key', 'credential', 'credentials',
+]);
+
+/**
+ * Recursively redact sensitive fields from a payload.
+ */
+function redactPayload(obj: unknown): unknown {
+  if (obj === null || typeof obj !== 'object') return obj;
+  if (Array.isArray(obj)) return obj.map(redactPayload);
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(obj)) {
+    if (SENSITIVE_KEYS.has(key)) {
+      result[key] = '[REDACTED]';
+    } else {
+      result[key] = redactPayload((obj as Record<string, unknown>)[key]);
+    }
+  }
+  return result;
+}
+
+/**
  * Tiered Circuit Breaker that validates State Contracts through
  * multiple levels of scrutiny.
  *
@@ -272,8 +298,11 @@ export class TieredCircuitBreaker {
     }
 
     try {
-      const inputText = JSON.stringify(contract.inputs.payload);
-      const outputText = JSON.stringify(contract.outputs.payload);
+      // Redact sensitive fields before sending to external provider
+      const redactedInput = redactPayload(contract.inputs.payload);
+      const redactedOutput = redactPayload(contract.outputs.payload);
+      const inputText = JSON.stringify(redactedInput);
+      const outputText = JSON.stringify(redactedOutput);
 
       const [inputVec, outputVec] = await Promise.all([
         this.embeddingProvider.embed(inputText),
@@ -318,8 +347,11 @@ export class TieredCircuitBreaker {
     }
 
     try {
-      const task = JSON.stringify(contract.inputs.payload);
-      const output = JSON.stringify(contract.outputs.payload);
+      // Redact sensitive fields before sending to external provider
+      const redactedInput = redactPayload(contract.inputs.payload);
+      const redactedOutput = redactPayload(contract.outputs.payload);
+      const task = JSON.stringify(redactedInput);
+      const output = JSON.stringify(redactedOutput);
       const context = JSON.stringify({
         decisions: contract.decisions,
         constraints: contract.constraints,
