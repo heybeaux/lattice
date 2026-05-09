@@ -178,7 +178,43 @@ export function redactContract<TIn = unknown, TOut = unknown>(
     }
   }
 
-  return Object.freeze(redacted) as StateContract<TIn, TOut>;
+  return deepFreeze(redacted) as StateContract<TIn, TOut>;
+}
+
+/**
+ * Recursively freeze an object graph to make it deeply immutable.
+ * Handles arrays, plain objects, and prevents infinite loops on cycles.
+ */
+function deepFreeze<T>(obj: T): T {
+  if (obj === null || typeof obj !== 'object') return obj;
+
+  const visited = new WeakSet<object>();
+
+  function freeze(node: unknown): unknown {
+    if (node === null || typeof node !== 'object') return node;
+
+    // Prevent infinite loops on cycles
+    if (visited.has(node as object)) return node;
+    visited.add(node as object);
+
+    // Freeze the node itself
+    Object.freeze(node);
+
+    // Recursively freeze properties/elements
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        freeze(item);
+      }
+    } else {
+      for (const key of Object.keys(node as Record<string, unknown>)) {
+        freeze((node as Record<string, unknown>)[key]);
+      }
+    }
+
+    return node;
+  }
+
+  return freeze(obj) as T;
 }
 
 /**

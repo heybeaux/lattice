@@ -462,7 +462,59 @@ function readRetentionCutoff(logPath: string): RetentionCutoff | null {
   const p = retentionPath(logPath);
   if (!fs.existsSync(p)) return null;
   try {
-    return JSON.parse(fs.readFileSync(p, 'utf-8')) as RetentionCutoff;
+    const parsed = JSON.parse(fs.readFileSync(p, 'utf-8')) as RetentionCutoff;
+
+    // Validate sidecar schema: cutoffSequence must be non-negative integer,
+    // cutoffHash must be a hex string of expected length.
+    if (
+      typeof parsed.cutoffSequence !== 'number' ||
+      !Number.isInteger(parsed.cutoffSequence) ||
+      parsed.cutoffSequence < 0
+    ) {
+      return null;
+    }
+    if (typeof parsed.cutoffHash !== 'string' || !/^[0-9a-f]{64,128}$/i.test(parsed.cutoffHash)) {
+      return null;
+    }
+
+    // Verify cutoffHash against the actual log entry at cutoffSequence.
+    // Stream the log to find the entry, recompute its hash, and compare.
+    if (!fs.existsSync(logPath)) return null;
+
+    let foundEntry: AuditLogEntry | null = null;
+    for (const line of iterateAuditLogSync(logPath)) {
+      if (line.parseError) continue;
+      const entry = line.parsed!;
+      if (entry.sequence === parsed.cutoffSequence) {
+        foundEntry = entry;
+        break;
+      }
+    }
+
+    if (!foundEntry) {
+      // Cutoff references a sequence that doesn't exist in the log.
+      return null;
+    }
+
+    // Recompute the hash for the found entry using the same algorithm.
+    // We infer the algorithm from the hash length (64 hex = sha256, 128 = sha512).
+    const algorithm = parsed.cutoffHash.length === 128 ? 'sha512' : 'sha256';
+    const recomputed = computeHash(
+      {
+        sequence: foundEntry.sequence,
+        timestamp: foundEntry.timestamp,
+        previousHash: foundEntry.previousHash,
+        data: foundEntry.data,
+      },
+      algorithm,
+    );
+
+    if (recomputed !== parsed.cutoffHash) {
+      // Hash mismatch — the cutoff is untrusted.
+      return null;
+    }
+
+    return parsed;
   } catch {
     return null;
   }
@@ -802,9 +854,9 @@ export class ComplianceAuditLog {
 
     // Case 2: chain verifies but ends mid-line (crash during append). Truncate
     // the partial bytes and resume — entries before the partial line are
-    // verified-good, so this is safe.
+    // verified-good, so this is safe. Allow recovery even when lastValidSequence === 0
+    // (genesis partial-record case).
     if (
-      result.lastValidSequence > 0 &&
       result.partialTailBytes > 0 &&
       result.totalEntries === result.lastValidSequence
     ) {

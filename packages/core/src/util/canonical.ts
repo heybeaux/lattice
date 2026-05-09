@@ -97,6 +97,29 @@ function emit(value: unknown, memo?: CanonicalMemo): string {
     s += ']';
     out = s;
   } else {
+    // Detect Date instances and call Date.prototype.toJSON()
+    if (obj instanceof Date) {
+      out = JSON.stringify(obj.toJSON());
+      if (memo) memo.set(obj, out);
+      return out;
+    }
+
+    // Detect unsupported built-ins and throw a clear TypeError
+    if (
+      obj instanceof Map ||
+      obj instanceof Set ||
+      obj instanceof RegExp ||
+      obj instanceof ArrayBuffer ||
+      ArrayBuffer.isView(obj) ||
+      (typeof URL !== 'undefined' && obj instanceof URL) ||
+      (typeof Buffer !== 'undefined' && obj instanceof Buffer)
+    ) {
+      throw new TypeError(
+        `Cannot canonicalize unsupported built-in type: ${obj.constructor.name}. ` +
+        `Pre-serialize it to a plain object or primitive before calling canonicalize().`
+      );
+    }
+
     // Sort own enumerable string keys without mutating the source.
     const keys = Object.keys(obj as Record<string, unknown>);
     keys.sort();

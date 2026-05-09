@@ -194,23 +194,12 @@ export class TieredCircuitBreaker {
     }
 
     const isAuto = this.config.tier === 'auto';
-    // Canonicalize each payload at most once per validate() call. Shared
-    // between L2 (embedding inputs) and L3 (judge inputs) so a single
-    // tiered-breaker step never canonicalizes the same payload twice.
-    //
-    // SECURITY (issue #6 / SEC-004): when providerRedaction === 'redact'
-    // we build the L2/L3 canon over a *redacted* copy of the contract so
-    // raw secrets in inputs/outputs/decisions/constraints/assumptions
-    // never reach the embedding/judge provider. Validation correctness
-    // is unaffected for legitimate task content — only credential-shaped
-    // values are masked.
-    const canon = this.buildProviderCanon(contract);
 
     if (isAuto) {
-      return this.validateAuto(contract, canon);
+      return this.validateAuto(contract);
     }
 
-    return this.validateManual(contract, canon);
+    return this.validateManual(contract);
   }
 
   /**
@@ -238,7 +227,6 @@ export class TieredCircuitBreaker {
    */
   private async validateAuto(
     contract: StateContract,
-    canon: PayloadCanon,
   ): Promise<ValidationResult> {
     const start = Date.now();
     let lastResult: ValidationResult | null = null;
@@ -251,9 +239,23 @@ export class TieredCircuitBreaker {
       return l1;
     }
 
+    // Build canon lazily only when entering L2/L3 logic (when providers are configured).
+    // Canonicalize each payload at most once per validate() call. Shared
+    // between L2 (embedding inputs) and L3 (judge inputs) so a single
+    // tiered-breaker step never canonicalizes the same payload twice.
+    //
+    // SECURITY (issue #6 / SEC-004): when providerRedaction === 'redact'
+    // we build the L2/L3 canon over a *redacted* copy of the contract so
+    // raw secrets in inputs/outputs/decisions/constraints/assumptions
+    // never reach the embedding/judge provider. Validation correctness
+    // is unaffected for legitimate task content — only credential-shaped
+    // values are masked.
+    let canon: PayloadCanon | undefined;
+
     // L2: Run if provider is available
     let l2Similarity: number | null = null;
     if (this.embeddingProvider) {
+      if (!canon) canon = this.buildProviderCanon(contract);
       const l2 = await this.validateL2(contract, Date.now(), canon);
       lastResult = l2;
       if (!l2.passed) {
@@ -269,6 +271,7 @@ export class TieredCircuitBreaker {
     const needsEscalation = l2Similarity !== null && l2Similarity < this.config.l3EscalationThreshold;
 
     if ((needsEscalation || isHighRisk) && this.judgeProvider) {
+      if (!canon) canon = this.buildProviderCanon(contract);
       const l3 = await this.validateL3(contract, Date.now(), canon);
       lastResult = l3;
       if (!l3.passed) {
@@ -286,12 +289,18 @@ export class TieredCircuitBreaker {
    */
   private async validateManual(
     contract: StateContract,
-    canon: PayloadCanon,
   ): Promise<ValidationResult> {
     const enabledTiers = this.getEnabledTiers();
     let lastResult: ValidationResult | null = null;
 
+    // Build canon lazily only when entering L2/L3 logic (when tier !== 'L1').
+    let canon: PayloadCanon | undefined;
+    const needsCanon = enabledTiers.some((t) => t === 'L2' || t === 'L3');
+
     for (const tier of enabledTiers) {
+      if ((tier === 'L2' || tier === 'L3') && !canon) {
+        canon = this.buildProviderCanon(contract);
+      }
       const result = await this.validateTier(contract, tier, canon);
       lastResult = result;
       if (!result.passed) {
@@ -322,7 +331,7 @@ export class TieredCircuitBreaker {
   private async validateTier(
     contract: StateContract,
     tier: ValidationTier,
-    canon: PayloadCanon,
+    canon?: PayloadCanon,
   ): Promise<ValidationResult> {
     const start = Date.now();
 
@@ -330,9 +339,9 @@ export class TieredCircuitBreaker {
       case 'L1':
         return this.validateL1(contract, start);
       case 'L2':
-        return this.validateL2(contract, start, canon);
+        return this.validateL2(contract, start, canon!);
       case 'L3':
-        return this.validateL3(contract, start, canon);
+        return this.validateL3(contract, start, canon!);
     }
   }
 

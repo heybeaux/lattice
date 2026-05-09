@@ -140,7 +140,8 @@ describe('Pipeline', () => {
         'always-fails',
         () => {
           invocations++;
-          throw new Error('boom');
+          // Return successfully but will fail breaker validation (L1+L3 without JudgeProvider)
+          return { data: 'questionable' };
         },
         {
           // Critically: the BREAKER ALSO requests 'retry' with maxRetries=2.
@@ -148,7 +149,8 @@ describe('Pipeline', () => {
           // retry and we'd see ~9 invocations. Post-fix, the wrapper
           // ignores 'retry' (warn-deprecate) and the pipeline owns the
           // retry semantics — exactly 3 invocations (1 + 2 retries).
-          breaker: { tier: 'L1', onReject: 'retry', maxRetries: 2 },
+          // Using L1+L3 without JudgeProvider causes validation failure.
+          breaker: { tier: 'L1+L3', onReject: 'retry', maxRetries: 2 },
         },
       )
       .onReject('retry', { maxRetries: 2 })
@@ -168,10 +170,13 @@ describe('Pipeline', () => {
         'always-fails',
         () => {
           invocations++;
-          throw new Error('boom');
+          // Return successfully but will fail breaker validation (L1+L3 without JudgeProvider)
+          return { data: 'questionable' };
         },
         {
-          breaker: { tier: 'L1', onReject: 'retry', maxRetries: 5 },
+          // Using L1+L3 without JudgeProvider causes validation failure,
+          // triggering the deprecated 'retry' case in wrap-agent.
+          breaker: { tier: 'L1+L3', onReject: 'retry', maxRetries: 5 },
         },
       )
       .onReject('abort')

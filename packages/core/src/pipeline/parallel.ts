@@ -2,6 +2,7 @@ import { StateContract } from '../contract/types.js';
 import { createContract } from '../contract/factory.js';
 import { wrapAgent, HandoffFailure } from '../wrapper/wrap-agent.js';
 import type { WrapAgentConfig } from '../wrapper/wrap-agent.js';
+import { canonicalize } from '../util/canonical.js';
 
 
 /**
@@ -190,12 +191,14 @@ function joinOutputs(
 
     case 'majority': {
       // Find the most common output (by canonical JSON equality). Only
-      // considers branches that produced a contract.
+      // considers branches that produced a contract. Use canonical JSON
+      // serializer so semantically identical payloads like {a:1,b:2} and
+      // {b:2,a:1} map to the same key.
       const counts = new Map<string, { index: number; count: number }>();
       for (let i = 0; i < byIndex.length; i++) {
         const c = byIndex[i];
         if (c === undefined) continue;
-        const key = JSON.stringify(c.outputs.payload);
+        const key = canonicalize(c.outputs.payload);
         const existing = counts.get(key);
         if (existing) {
           existing.count++;

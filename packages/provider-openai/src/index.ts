@@ -418,6 +418,15 @@ export function createOpenAIJudgeProvider(
 }
 
 /**
+ * Escape attacker-controlled strings to prevent XML tag injection.
+ * Replaces `<` and `>` with HTML entities so embedded sequences like
+ * `</output>` cannot terminate the tagged sections.
+ */
+function escapeForTaggedBlob(text: string): string {
+  return text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/**
  * Build the user-role prompt for the judge. Delimited XML-style tags
  * isolate the three untrusted blobs from each other and from the system
  * instruction.
@@ -429,21 +438,20 @@ export function buildJudgeUserPrompt(
   output: string,
   contractContext: string,
 ): string {
-  // We do NOT escape `</task>` etc. inside the data — the system prompt
-  // already instructs the model to ignore embedded directives, and any
-  // attempt to close+reopen tags is itself flagged as data. The schema
-  // validator on the response side is the actual security boundary.
+  // Escape attacker-controlled strings to prevent embedded sequences like
+  // `</output>` from terminating the tagged sections. The judge prompt
+  // expects the data to be entity-encoded; the model decodes naturally.
   return [
     '<task>',
-    task,
+    escapeForTaggedBlob(task),
     '</task>',
     '',
     '<output>',
-    output,
+    escapeForTaggedBlob(output),
     '</output>',
     '',
     '<context>',
-    contractContext,
+    escapeForTaggedBlob(contractContext),
     '</context>',
     '',
     'Evaluate the output against the task and respond with the JSON object specified in your system instructions.',

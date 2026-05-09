@@ -92,6 +92,8 @@ describe('parallel()', () => {
     expect(result.allCompleted).toBe(false);
     expect(result.succeeded).toBe(0);
     expect(result.failed).toBe(2);
+    // Assert that the output contains the failure payload (null from HandoffFailure)
+    expect(result.output).toBeNull();
   });
 
   // 'first-position' preserves the legacy index-0-wins semantics for callers
