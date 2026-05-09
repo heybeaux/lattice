@@ -91,10 +91,20 @@ export type {
 } from './reducer/consensus.js';
 
 // Compliance
-export { ComplianceAuditLog, GENESIS_HASH } from './compliance/audit-log.js';
+export {
+  ComplianceAuditLog,
+  GENESIS_HASH,
+  AuditLogIntegrityError,
+  iterateAuditLog,
+  streamVerify,
+  streamVerifySync,
+} from './compliance/audit-log.js';
 export type {
   ComplianceConfig,
   AuditLogEntry,
+  RetentionCutoff,
+  IteratedLine,
+  StreamVerifyResult,
 } from './compliance/audit-log.js';
 
 export {
@@ -117,3 +127,11 @@ export type {
   ComplianceRole,
   CompliancePermission,
 } from './compliance/rbac.js';
+
+// Canonical JSON serialization (shared utility for hashing / determinism)
+export { canonicalize, CanonicalMemo } from './util/canonical.js';
+
+// Token-bucket rate limiter (issue #19) — used by providers to throttle
+// outbound calls (e.g., embedding APIs) without taking a network dependency.
+export { TokenBucket } from './util/rate-limit.js';
+export type { TokenBucketOptions } from './util/rate-limit.js';

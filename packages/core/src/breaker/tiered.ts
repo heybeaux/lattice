@@ -1,6 +1,8 @@
 import { SchemaValidator, ValidationResult as SchemaResult } from '../contract/validator.js';
 import { StateContract } from '../contract/types.js';
 import { CircuitBreaker } from './breaker.js';
+import { canonicalize, CanonicalMemo } from '../util/canonical.js';
+import { redactContract, type SensitivityLevel } from '../events/redact.js';
 import {
   TieredCircuitBreakerConfig,
   ValidationResult,
@@ -10,29 +12,56 @@ import {
 } from './types.js';
 
 /**
- * Sensitive field patterns for redaction before provider calls.
+ * Per-`validate()`-call memo of canonicalized payload strings. Built once
+ * at the top of {@link TieredCircuitBreaker.validate} and threaded through
+ * to L2/L3 so the same payload is canonicalized at most once per step
+ * (fix for #17 — eliminates the 5x stringify amplification across
+ * reducer/L2/L3/audit).
  */
-const SENSITIVE_KEYS = new Set([
-  'apiKey', 'api_key', 'password', 'passwd', 'secret', 'secretKey', 'secret_key',
-  'token', 'accessToken', 'access_token', 'authorization', 'auth',
-  'privateKey', 'private_key', 'credential', 'credentials',
-]);
+interface PayloadCanon {
+  /** Canonical string for `contract.inputs.payload`. Computed lazily. */
+  inputs(): string;
+  /** Canonical string for `contract.outputs.payload`. Computed lazily. */
+  outputs(): string;
+  /** Canonical string for `{ decisions, constraints, assumptions }` (L3 context). */
+  context(): string;
+  /**
+   * The shared memo. Exposed so the same WeakMap is reused across all three
+   * canonicalization calls — nested objects shared between inputs/outputs/
+   * context are emitted only once.
+   */
+  readonly memo: CanonicalMemo;
+}
 
-/**
- * Recursively redact sensitive fields from a payload.
- */
-function redactPayload(obj: unknown): unknown {
-  if (obj === null || typeof obj !== 'object') return obj;
-  if (Array.isArray(obj)) return obj.map(redactPayload);
-  const result: Record<string, unknown> = {};
-  for (const key of Object.keys(obj)) {
-    if (SENSITIVE_KEYS.has(key)) {
-      result[key] = '[REDACTED]';
-    } else {
-      result[key] = redactPayload((obj as Record<string, unknown>)[key]);
-    }
-  }
-  return result;
+function buildPayloadCanon(contract: StateContract): PayloadCanon {
+  const memo = new CanonicalMemo();
+  let inputsCache: string | undefined;
+  let outputsCache: string | undefined;
+  let contextCache: string | undefined;
+  return {
+    memo,
+    inputs(): string {
+      if (inputsCache === undefined) inputsCache = canonicalize(contract.inputs.payload, memo);
+      return inputsCache;
+    },
+    outputs(): string {
+      if (outputsCache === undefined) outputsCache = canonicalize(contract.outputs.payload, memo);
+      return outputsCache;
+    },
+    context(): string {
+      if (contextCache === undefined) {
+        contextCache = canonicalize(
+          {
+            decisions: contract.decisions,
+            constraints: contract.constraints,
+            assumptions: contract.assumptions,
+          },
+          memo,
+        );
+      }
+      return contextCache;
+    },
+  };
 }
 
 /**
@@ -66,6 +95,10 @@ export class TieredCircuitBreaker {
   > & {
     /** L2 similarity threshold below which L3 is triggered (auto mode) */
     l3EscalationThreshold: number;
+    /** Whether to redact payloads before shipping to L2/L3 providers (issue #6) */
+    providerRedaction: 'redact' | 'raw';
+    /** Sensitivity level used when providerRedaction === 'redact' */
+    providerRedactionLevel: SensitivityLevel;
   };
 
   private readonly schemaValidator: SchemaValidator;
@@ -83,6 +116,11 @@ export class TieredCircuitBreaker {
       recoveryTimeoutMs: config?.recoveryTimeoutMs ?? 60_000,
       onReject: config?.onReject ?? 'abort',
       maxRetries: config?.maxRetries ?? 2,
+      // Default to redact: secrets in payloads must NOT leave the process
+      // unmodified to a remote LLM provider (issue #6 / SEC-004). Callers
+      // running self-hosted/on-prem providers can opt out with 'raw'.
+      providerRedaction: config?.providerRedaction ?? 'redact',
+      providerRedactionLevel: config?.providerRedactionLevel ?? 'high',
     };
 
     this.schemaValidator = new SchemaValidator();
@@ -165,10 +203,31 @@ export class TieredCircuitBreaker {
   }
 
   /**
+   * Build the {@link PayloadCanon} that L2/L3 use to serialize payloads
+   * for the embedding / judge provider. Honors {@link this.config.providerRedaction}:
+   *
+   * - 'redact' (default): redact a deep clone of the contract via
+   *   {@link redactContract}, then canonicalize the redacted version.
+   * - 'raw': canonicalize the original contract — explicit opt-out for
+   *   self-hosted providers where the trust boundary is the same process.
+   */
+  private buildProviderCanon(contract: StateContract): PayloadCanon {
+    if (this.config.providerRedaction === 'raw') {
+      return buildPayloadCanon(contract);
+    }
+    const redacted = redactContract(contract, {
+      sensitivityLevel: this.config.providerRedactionLevel,
+    });
+    return buildPayloadCanon(redacted);
+  }
+
+  /**
    * Auto mode: L1 always, L2 if available, L3 only on escalation.
    * Default latency: <200ms (L1+L2), 1-3s only when L3 escalates.
    */
-  private async validateAuto(contract: StateContract): Promise<ValidationResult> {
+  private async validateAuto(
+    contract: StateContract,
+  ): Promise<ValidationResult> {
     const start = Date.now();
     let lastResult: ValidationResult | null = null;
 
@@ -180,10 +239,24 @@ export class TieredCircuitBreaker {
       return l1;
     }
 
+    // Build canon lazily only when entering L2/L3 logic (when providers are configured).
+    // Canonicalize each payload at most once per validate() call. Shared
+    // between L2 (embedding inputs) and L3 (judge inputs) so a single
+    // tiered-breaker step never canonicalizes the same payload twice.
+    //
+    // SECURITY (issue #6 / SEC-004): when providerRedaction === 'redact'
+    // we build the L2/L3 canon over a *redacted* copy of the contract so
+    // raw secrets in inputs/outputs/decisions/constraints/assumptions
+    // never reach the embedding/judge provider. Validation correctness
+    // is unaffected for legitimate task content — only credential-shaped
+    // values are masked.
+    let canon: PayloadCanon | undefined;
+
     // L2: Run if provider is available
     let l2Similarity: number | null = null;
     if (this.embeddingProvider) {
-      const l2 = await this.validateL2(contract, Date.now());
+      if (!canon) canon = this.buildProviderCanon(contract);
+      const l2 = await this.validateL2(contract, Date.now(), canon);
       lastResult = l2;
       if (!l2.passed) {
         this.breaker.recordFailure();
@@ -198,7 +271,8 @@ export class TieredCircuitBreaker {
     const needsEscalation = l2Similarity !== null && l2Similarity < this.config.l3EscalationThreshold;
 
     if ((needsEscalation || isHighRisk) && this.judgeProvider) {
-      const l3 = await this.validateL3(contract, Date.now());
+      if (!canon) canon = this.buildProviderCanon(contract);
+      const l3 = await this.validateL3(contract, Date.now(), canon);
       lastResult = l3;
       if (!l3.passed) {
         this.breaker.recordFailure();
@@ -213,12 +287,21 @@ export class TieredCircuitBreaker {
   /**
    * Manual mode: Run explicitly configured tiers in sequence.
    */
-  private async validateManual(contract: StateContract): Promise<ValidationResult> {
+  private async validateManual(
+    contract: StateContract,
+  ): Promise<ValidationResult> {
     const enabledTiers = this.getEnabledTiers();
     let lastResult: ValidationResult | null = null;
 
+    // Build canon lazily only when entering L2/L3 logic (when tier !== 'L1').
+    let canon: PayloadCanon | undefined;
+    const needsCanon = enabledTiers.some((t) => t === 'L2' || t === 'L3');
+
     for (const tier of enabledTiers) {
-      const result = await this.validateTier(contract, tier);
+      if ((tier === 'L2' || tier === 'L3') && !canon) {
+        canon = this.buildProviderCanon(contract);
+      }
+      const result = await this.validateTier(contract, tier, canon);
       lastResult = result;
       if (!result.passed) {
         this.breaker.recordFailure();
@@ -248,6 +331,7 @@ export class TieredCircuitBreaker {
   private async validateTier(
     contract: StateContract,
     tier: ValidationTier,
+    canon?: PayloadCanon,
   ): Promise<ValidationResult> {
     const start = Date.now();
 
@@ -255,9 +339,9 @@ export class TieredCircuitBreaker {
       case 'L1':
         return this.validateL1(contract, start);
       case 'L2':
-        return this.validateL2(contract, start);
+        return this.validateL2(contract, start, canon!);
       case 'L3':
-        return this.validateL3(contract, start);
+        return this.validateL3(contract, start, canon!);
     }
   }
 
@@ -287,6 +371,7 @@ export class TieredCircuitBreaker {
   private async validateL2(
     contract: StateContract,
     start: number,
+    canon: PayloadCanon,
   ): Promise<ValidationResult> {
     if (!this.embeddingProvider) {
       return {
@@ -298,16 +383,39 @@ export class TieredCircuitBreaker {
     }
 
     try {
-      // Redact sensitive fields before sending to external provider
-      const redactedInput = redactPayload(contract.inputs.payload);
-      const redactedOutput = redactPayload(contract.outputs.payload);
-      const inputText = JSON.stringify(redactedInput);
-      const outputText = JSON.stringify(redactedOutput);
+      // Canonicalize once per validate() step (memoized in `canon`); reused
+      // by L3 below if escalation triggers. Replaces a non-deterministic
+      // JSON.stringify (insertion-order-sensitive) with a stable canonical
+      // form so semantic similarity is reproducible across processes.
+      // The canon already reflects provider-redaction (tree-walking
+      // redactContract — supersedes the SENSITIVE_KEYS approach from the
+      // parallel main-branch fix), so the strings here are safe to ship
+      // to a remote embedding provider (issue #6 / FINDING-001).
+      const inputText = canon.inputs();
+      const outputText = canon.outputs();
 
-      const [inputVec, outputVec] = await Promise.all([
-        this.embeddingProvider.embed(inputText),
-        this.embeddingProvider.embed(outputText),
-      ]);
+      // Issue #19 (H12): prefer a single batched call when the provider
+      // supports it. Batching halves the L2 round-trip count and lets
+      // providers (e.g., OpenAI's `input: [a, b]` form) amortize fixed
+      // per-request overhead. Fall back to two parallel `embed` calls for
+      // older providers that did not implement `embedBatch`.
+      let inputVec: number[];
+      let outputVec: number[];
+      if (typeof this.embeddingProvider.embedBatch === 'function') {
+        const vecs = await this.embeddingProvider.embedBatch([inputText, outputText]);
+        if (!Array.isArray(vecs) || vecs.length !== 2) {
+          throw new Error(
+            `EmbeddingProvider.embedBatch returned ${Array.isArray(vecs) ? vecs.length : 'non-array'} vectors; expected 2`,
+          );
+        }
+        inputVec = vecs[0];
+        outputVec = vecs[1];
+      } else {
+        [inputVec, outputVec] = await Promise.all([
+          this.embeddingProvider.embed(inputText),
+          this.embeddingProvider.embed(outputText),
+        ]);
+      }
 
       const similarity = this.embeddingProvider.similarity(inputVec, outputVec);
       const durationMs = Date.now() - start;
@@ -336,6 +444,7 @@ export class TieredCircuitBreaker {
   private async validateL3(
     contract: StateContract,
     start: number,
+    canon: PayloadCanon,
   ): Promise<ValidationResult> {
     if (!this.judgeProvider) {
       return {
@@ -347,21 +456,28 @@ export class TieredCircuitBreaker {
     }
 
     try {
-      // Redact sensitive fields before sending to external provider
-      const redactedInput = redactPayload(contract.inputs.payload);
-      const redactedOutput = redactPayload(contract.outputs.payload);
-      const task = JSON.stringify(redactedInput);
-      const output = JSON.stringify(redactedOutput);
-      const context = JSON.stringify({
-        decisions: contract.decisions,
-        constraints: contract.constraints,
-        assumptions: contract.assumptions,
-      });
+      // Reuses memoized canonical forms from `canon`. If L2 already ran in
+      // this validate() step, inputs/outputs are returned from the per-step
+      // cache and not re-stringified. The canon was built from the
+      // provider-redacted contract (see buildProviderCanon), so secrets
+      // never reach the judge provider.
+      const task = canon.inputs();
+      const output = canon.outputs();
+      const context = canon.context();
 
       const judgeResult = await this.judgeProvider.judge(task, output, context);
       const durationMs = Date.now() - start;
 
-      if (judgeResult.verdict === 'pass') {
+      // Security (issue #26 / FINDING-008): only `verdict === 'pass'` AND
+      // confidence at or above `l3ConfidenceThreshold` constitute a pass.
+      // Any other verdict (`fail`, `uncertain`, or anything the JudgeProvider
+      // cannot vouch for) is rejected. The provider is responsible for
+      // schema-validating the underlying LLM response and downgrading
+      // unparseable / out-of-range responses to `verdict: 'fail'`.
+      if (
+        judgeResult.verdict === 'pass' &&
+        judgeResult.confidence >= this.config.l3ConfidenceThreshold
+      ) {
         return {
           passed: true,
           tier: 'L3',
@@ -370,12 +486,22 @@ export class TieredCircuitBreaker {
         };
       }
 
-      if (judgeResult.verdict === 'uncertain' && judgeResult.confidence < this.config.l3ConfidenceThreshold) {
+      if (judgeResult.verdict === 'pass') {
         return {
           passed: false,
           tier: 'L3',
           durationMs,
-          reason: `Judge uncertain with confidence ${judgeResult.confidence.toFixed(2)} below threshold ${this.config.l3ConfidenceThreshold}`,
+          reason: `Judge passed but confidence ${judgeResult.confidence.toFixed(2)} below threshold ${this.config.l3ConfidenceThreshold}`,
+          confidence: judgeResult.confidence,
+        };
+      }
+
+      if (judgeResult.verdict === 'uncertain') {
+        return {
+          passed: false,
+          tier: 'L3',
+          durationMs,
+          reason: `Judge uncertain with confidence ${judgeResult.confidence.toFixed(2)}`,
           confidence: judgeResult.confidence,
         };
       }

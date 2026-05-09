@@ -1,12 +1,38 @@
+"""Lattice circuit breaker for LangGraph nodes.
+
+Fail-closed semantics (issue #27 / FINDING-009)
+================================================
+Prior to the audit fix, ``validate_l2`` and ``validate_l3`` returned
+``passed=True`` whenever the OpenAI client raised — credentials missing,
+network down, JSON parse error, or any other unexpected failure. That is
+the *opposite* of what an L2/L3 validator should do: provider outage is
+exactly the moment when an unvalidated handoff is most dangerous.
+
+The new behavior:
+
+* Default mode is **block_on_failure=True** (already the default at the
+  ``BreakerConfig`` level). On any provider error, ``passed=False`` is
+  returned and the wrapper raises ``LatticeValidationError``.
+* Callers can opt into degraded operation explicitly by setting
+  ``shadow=True`` (on the wrapper — runs validation but never blocks)
+  or ``block_on_failure=False`` (on the config — runs validation, logs
+  failures, but does not raise).
+* All provider errors are logged via the standard ``logging`` module so
+  operators can monitor degraded validation health.
+"""
+
 from __future__ import annotations
 
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import jsonschema
+
+logger = logging.getLogger(__name__)
 
 _SCHEMA_PATH = Path(__file__).parent / "contract.schema.json"
 _schema: dict | None = None
@@ -50,6 +76,14 @@ def validate_l1(contract_dict: dict) -> ValidationResult:
 
 
 def validate_l2(inputs: Any, outputs: Any, *, openai_api_key: str | None = None) -> ValidationResult:
+    """Run L2 embedding-similarity validation.
+
+    Fail-closed: any exception (import error, missing credentials, network
+    failure, JSON serialization issue, etc.) returns ``passed=False`` with
+    a descriptive reason. The error is also logged at WARNING level. The
+    caller decides whether to surface this as a hard block (default) or to
+    proceed in degraded mode via ``shadow`` / ``block_on_failure=False``.
+    """
     start = time.monotonic()
     try:
         import numpy as np
@@ -79,10 +113,24 @@ def validate_l2(inputs: Any, outputs: Any, *, openai_api_key: str | None = None)
         )
     except Exception as e:
         latency_ms = int((time.monotonic() - start) * 1000)
-        return ValidationResult(passed=True, tier="L2", confidence=0.5, latency_ms=latency_ms, reason=f"L2 skipped: {e}")
+        # Issue #27: fail closed. Surface the error so callers/operators
+        # can see *why* validation could not run rather than silently
+        # waving the handoff through.
+        logger.warning("L2 validation failed: %s", e, exc_info=True)
+        return ValidationResult(
+            passed=False,
+            tier="L2",
+            confidence=0.0,
+            latency_ms=latency_ms,
+            reason=f"L2 provider error: {e}",
+        )
 
 
 def validate_l3(inputs: Any, outputs: Any, *, openai_api_key: str | None = None) -> ValidationResult:
+    """Run L3 LLM-as-judge validation.
+
+    Fail-closed on any exception. See :func:`validate_l2` for rationale.
+    """
     start = time.monotonic()
     try:
         from openai import OpenAI
@@ -109,20 +157,57 @@ def validate_l3(inputs: Any, outputs: Any, *, openai_api_key: str | None = None)
 
         result = json.loads(resp.choices[0].message.content)
         latency_ms = int((time.monotonic() - start) * 1000)
+        # Default to passed=False if the field is missing or malformed —
+        # do NOT extend trust to ambiguous judge responses.
+        passed_value = result.get("passed", False)
+        if not isinstance(passed_value, bool):
+            passed_value = False
+        confidence_value = result.get("confidence", 0.0)
+        try:
+            confidence_value = float(confidence_value)
+        except (TypeError, ValueError):
+            confidence_value = 0.0
+        # Clamp confidence to [0, 1] — caller should not be able to
+        # forge a 999.0 to clear a downstream threshold.
+        confidence_value = max(0.0, min(1.0, confidence_value))
         return ValidationResult(
-            passed=bool(result.get("passed", True)),
+            passed=passed_value,
             tier="L3",
-            confidence=float(result.get("confidence", 0.8)),
+            confidence=confidence_value,
             latency_ms=latency_ms,
             reason=result.get("reason", ""),
         )
     except Exception as e:
         latency_ms = int((time.monotonic() - start) * 1000)
-        return ValidationResult(passed=True, tier="L3", confidence=0.5, latency_ms=latency_ms, reason=f"L3 skipped: {e}")
+        logger.warning("L3 validation failed: %s", e, exc_info=True)
+        return ValidationResult(
+            passed=False,
+            tier="L3",
+            confidence=0.0,
+            latency_ms=latency_ms,
+            reason=f"L3 provider error: {e}",
+        )
 
 
 @dataclass
 class BreakerConfig:
+    """Configuration for the LangGraph circuit breaker.
+
+    Attributes
+    ----------
+    tier:
+        Validation tier: "L1", "L2", "L3", or "auto".
+    l2_threshold:
+        L2 similarity below which auto-mode escalates to L3.
+    openai_api_key:
+        Override for the OpenAI client. Falls back to OPENAI_API_KEY env var.
+    block_on_failure:
+        Whether the wrapper should raise on validation failure (default True).
+        Set to False for degraded / monitor-only operation. Combine with the
+        wrapper-level ``shadow=True`` flag if you want to run validation
+        purely as a logged signal.
+    """
+
     tier: str = "auto"  # "L1", "L2", "L3", or "auto"
     l2_threshold: float = 0.85
     openai_api_key: str | None = None
@@ -147,7 +232,7 @@ def run_circuit_breaker(
         l2 = validate_l2(inputs, outputs, openai_api_key=config.openai_api_key)
         if config.tier == "L2":
             return l2
-        # auto: escalate to L3 if L2 confidence is low
+        # auto: escalate to L3 if L2 confidence is low or L2 itself failed.
         if not l2.passed or l2.confidence < config.l2_threshold:
             l3 = validate_l3(inputs, outputs, openai_api_key=config.openai_api_key)
             return l3

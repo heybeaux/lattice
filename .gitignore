@@ -5,5 +5,8 @@ dist/
 .env
 .DS_Store
 packages/core/test/*.archive-*.jsonl
+packages/core/test/*.retention.cutoff
+packages/core/test/*.lock
+packages/core/test/*.corrupt.*
 .venv/*
 .history/*

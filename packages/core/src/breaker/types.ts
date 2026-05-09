@@ -50,6 +50,36 @@ export interface TieredCircuitBreakerConfig {
 
   /** Max retries when onReject is 'retry' (default: 2) */
   maxRetries?: number;
+
+  /**
+   * Redaction policy for payloads sent to external L2/L3 providers
+   * (issue #6 / SEC-004). Validation tiers serialize payload bodies and
+   * ship them to OpenAI's embedding/chat APIs — without redaction, raw
+   * secrets in `contract.inputs.payload`, `contract.outputs.payload`,
+   * decisions, constraints, and assumptions leave the trust boundary
+   * verbatim.
+   *
+   * Modes:
+   *  - 'redact' (DEFAULT): redact the contract via the same key-name +
+   *    pattern detectors used by `redactContract` before canonicalization,
+   *    so raw secrets never reach a remote provider.
+   *  - 'raw': ship payloads unredacted. Caller has explicitly accepted
+   *    that secrets in payloads will be transmitted to the configured
+   *    L2/L3 provider — only safe with self-hosted / on-prem providers.
+   *
+   * The redaction is applied ONLY to data leaving the process via L2/L3
+   * providers. The original contract returned to callers and emitted on
+   * the event bus is unchanged.
+   */
+  providerRedaction?: 'redact' | 'raw';
+
+  /**
+   * Sensitivity level used when {@link providerRedaction} is `'redact'`.
+   * Defaults to 'high' to maximize coverage on the secret-exfiltration
+   * boundary; downgrade to 'medium' or 'low' only when payload bodies
+   * legitimately need to retain phone/email/PII for the judge to evaluate.
+   */
+  providerRedactionLevel?: 'low' | 'medium' | 'high';
 }
 
 /**
@@ -71,11 +101,26 @@ export interface ValidationResult {
 /**
  * Provider interface for L2 embedding similarity checks.
  * User must inject an implementation — Lattice ships none by default.
+ *
+ * Performance contract (issue #19):
+ * - When `embedBatch` is implemented, the breaker batches the two L2
+ *   embedding calls (expected + actual) into a single provider request.
+ *   This halves round-trips and is the recommended path for any provider
+ *   whose backend supports array inputs (e.g., OpenAI's embeddings API).
+ * - When `embedBatch` is absent, the breaker falls back to two parallel
+ *   `embed` calls — preserving the original semantics for older providers.
  */
 export interface EmbeddingProvider {
-  /** Get embedding vector for a string */
+  /** Get embedding vector for a single string. */
   embed(text: string): Promise<number[]>;
-  /** Compute cosine similarity between two vectors */
+  /**
+   * Optional: get embedding vectors for multiple strings in a SINGLE
+   * provider request. Implementations MUST return one vector per input
+   * in the same order. The breaker prefers this entrypoint when present
+   * to avoid the 2x round-trip + cost on every L2 step (issue #19).
+   */
+  embedBatch?(texts: string[]): Promise<number[][]>;
+  /** Compute cosine similarity between two vectors. */
   similarity(a: number[], b: number[]): number;
 }
 

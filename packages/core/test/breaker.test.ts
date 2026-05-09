@@ -286,6 +286,130 @@ describe('TieredCircuitBreaker', () => {
     expect(result.passed).toBe(false);
     expect(result.reason).toBe('Circuit breaker is open');
   });
+
+  // ─── Issue #6 / SEC-004 — provider-path redaction ───
+
+  describe('L2/L3 provider-path redaction (issue #6)', () => {
+    it('redacts secrets before they reach the embedding provider by default', async () => {
+      const seenInputs: string[] = [];
+      const seenOutputs: string[] = [];
+      const provider: EmbeddingProvider = {
+        embed: async (text: string) => {
+          // Order: validateL2 calls embed(input) and embed(output) in
+          // Promise.all. Push both into a single array — we only care that
+          // neither contains the raw secret.
+          seenInputs.push(text);
+          seenOutputs.push(text);
+          return [1, 0, 0];
+        },
+        similarity: () => 1.0,
+      };
+
+      const cb = new TieredCircuitBreaker({ tier: 'L1+L2' });
+      cb.setEmbeddingProvider(provider);
+
+      const contract = createContract({
+        fromAgent: 'test',
+        inputs: { user: { apiKey: 'sk-live-NESTED-LEAKED-12345' } },
+        outputs: { token: 'ghp_' + 'a'.repeat(36) },
+        budget: { tokensUsed: 0, callsMade: 0, wallClockMs: 0 },
+      });
+
+      const result = await cb.validate(contract);
+      expect(result.passed).toBe(true);
+
+      const allText = seenInputs.concat(seenOutputs).join('\n');
+      expect(allText).not.toContain('sk-live-NESTED-LEAKED');
+      expect(allText).not.toContain('ghp_aaaaaaa');
+      expect(allText).toContain('[REDACTED]');
+    });
+
+    it('redacts secrets in decisions/constraints/assumptions before reaching the judge', async () => {
+      const seen: { task: string; output: string; ctx: string }[] = [];
+      const judge: JudgeProvider = {
+        judge: async (task, output, ctx) => {
+          seen.push({ task, output, ctx });
+          return { verdict: 'pass', confidence: 0.9 };
+        },
+      };
+
+      const cb = new TieredCircuitBreaker({ tier: 'L1+L3' });
+      cb.setJudgeProvider(judge);
+
+      const contract = createContract({
+        fromAgent: 'test',
+        inputs: { q: 'safe' },
+        outputs: { a: 'safe' },
+        decisions: [
+          { type: 'action', rationale: 'Used api key sk-ant-LEAKED-DECISION' },
+        ],
+        constraints: [
+          {
+            description:
+              'fetch failed: token=sk_live_abcdefghijklmnopqrstuvwx',
+          },
+        ],
+        budget: { tokensUsed: 0, callsMade: 0, wallClockMs: 0 },
+      });
+
+      await cb.validate(contract);
+      expect(seen).toHaveLength(1);
+      expect(seen[0].ctx).not.toContain('sk-ant-LEAKED');
+      expect(seen[0].ctx).not.toContain('sk_live_abcdef');
+      expect(seen[0].ctx).toContain('[REDACTED]');
+    });
+
+    it('respects providerRedaction: "raw" opt-out for self-hosted providers', async () => {
+      const seen: string[] = [];
+      const provider: EmbeddingProvider = {
+        embed: async (text: string) => {
+          seen.push(text);
+          return [1, 0, 0];
+        },
+        similarity: () => 1.0,
+      };
+
+      const cb = new TieredCircuitBreaker({
+        tier: 'L1+L2',
+        providerRedaction: 'raw',
+      });
+      cb.setEmbeddingProvider(provider);
+
+      const contract = createContract({
+        fromAgent: 'test',
+        inputs: { apiKey: 'sk-live-RAW-OPTED-IN' },
+        outputs: { ok: true },
+        budget: { tokensUsed: 0, callsMade: 0, wallClockMs: 0 },
+      });
+
+      await cb.validate(contract);
+      // Caller explicitly opted out of redaction — secret reaches the
+      // (self-hosted) provider verbatim.
+      expect(seen.join('\n')).toContain('sk-live-RAW-OPTED-IN');
+    });
+
+    it('does not mutate the original contract when redacting for the provider', async () => {
+      const provider: EmbeddingProvider = {
+        embed: async () => [1, 0, 0],
+        similarity: () => 1.0,
+      };
+
+      const cb = new TieredCircuitBreaker({ tier: 'L1+L2' });
+      cb.setEmbeddingProvider(provider);
+
+      const contract = createContract({
+        fromAgent: 'test',
+        inputs: { apiKey: 'sk-live-ORIGINAL' },
+        outputs: { ok: true },
+        budget: { tokensUsed: 0, callsMade: 0, wallClockMs: 0 },
+      });
+
+      await cb.validate(contract);
+      // Original contract unchanged — only the canonical string sent to
+      // the provider was redacted.
+      expect((contract.inputs.payload as any).apiKey).toBe('sk-live-ORIGINAL');
+    });
+  });
 });
 
 // ─── wrapAgent ───
