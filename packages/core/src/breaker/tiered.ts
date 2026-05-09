@@ -435,7 +435,16 @@ export class TieredCircuitBreaker {
       const judgeResult = await this.judgeProvider.judge(task, output, context);
       const durationMs = Date.now() - start;
 
-      if (judgeResult.verdict === 'pass') {
+      // Security (issue #26 / FINDING-008): only `verdict === 'pass'` AND
+      // confidence at or above `l3ConfidenceThreshold` constitute a pass.
+      // Any other verdict (`fail`, `uncertain`, or anything the JudgeProvider
+      // cannot vouch for) is rejected. The provider is responsible for
+      // schema-validating the underlying LLM response and downgrading
+      // unparseable / out-of-range responses to `verdict: 'fail'`.
+      if (
+        judgeResult.verdict === 'pass' &&
+        judgeResult.confidence >= this.config.l3ConfidenceThreshold
+      ) {
         return {
           passed: true,
           tier: 'L3',
@@ -444,12 +453,22 @@ export class TieredCircuitBreaker {
         };
       }
 
-      if (judgeResult.verdict === 'uncertain' && judgeResult.confidence < this.config.l3ConfidenceThreshold) {
+      if (judgeResult.verdict === 'pass') {
         return {
           passed: false,
           tier: 'L3',
           durationMs,
-          reason: `Judge uncertain with confidence ${judgeResult.confidence.toFixed(2)} below threshold ${this.config.l3ConfidenceThreshold}`,
+          reason: `Judge passed but confidence ${judgeResult.confidence.toFixed(2)} below threshold ${this.config.l3ConfidenceThreshold}`,
+          confidence: judgeResult.confidence,
+        };
+      }
+
+      if (judgeResult.verdict === 'uncertain') {
+        return {
+          passed: false,
+          tier: 'L3',
+          durationMs,
+          reason: `Judge uncertain with confidence ${judgeResult.confidence.toFixed(2)}`,
           confidence: judgeResult.confidence,
         };
       }
