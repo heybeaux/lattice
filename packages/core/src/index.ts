@@ -91,10 +91,20 @@ export type {
 } from './reducer/consensus.js';
 
 // Compliance
-export { ComplianceAuditLog, GENESIS_HASH } from './compliance/audit-log.js';
+export {
+  ComplianceAuditLog,
+  GENESIS_HASH,
+  AuditLogIntegrityError,
+  iterateAuditLog,
+  streamVerify,
+  streamVerifySync,
+} from './compliance/audit-log.js';
 export type {
   ComplianceConfig,
   AuditLogEntry,
+  RetentionCutoff,
+  IteratedLine,
+  StreamVerifyResult,
 } from './compliance/audit-log.js';
 
 export {

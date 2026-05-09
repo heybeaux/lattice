@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   ComplianceAuditLog,
   GENESIS_HASH,
+  AuditLogIntegrityError,
   verifyAuditLog,
   verifyAuditLogDetailed,
   generateVerificationCertificate,
@@ -15,19 +16,41 @@ import * as path from 'path';
 
 const TEST_LOG_PATH = path.join(__dirname, 'test-audit.log');
 
+/** Remove the log plus any sidecars (lock, retention cutoff, quarantined copies). */
+function cleanupLogArtifacts(logPath: string): void {
+  for (const p of [logPath, `${logPath}.lock`, `${logPath}.retention.cutoff`]) {
+    if (fs.existsSync(p)) {
+      try {
+        fs.chmodSync(p, 0o644);
+      } catch {
+        /* ignore */
+      }
+      fs.unlinkSync(p);
+    }
+  }
+  // Quarantined copies use timestamp-suffixed names.
+  const dir = path.dirname(logPath);
+  const base = path.basename(logPath);
+  if (fs.existsSync(dir)) {
+    for (const name of fs.readdirSync(dir)) {
+      if (name.startsWith(`${base}.corrupt.`) || name.startsWith(`${base}.retention.cutoff.tmp.`)) {
+        try {
+          fs.unlinkSync(path.join(dir, name));
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+  }
+}
+
 describe('ComplianceAuditLog', () => {
   beforeEach(() => {
-    if (fs.existsSync(TEST_LOG_PATH)) {
-      fs.chmodSync(TEST_LOG_PATH, 0o644);
-      fs.unlinkSync(TEST_LOG_PATH);
-    }
+    cleanupLogArtifacts(TEST_LOG_PATH);
   });
 
   afterEach(() => {
-    if (fs.existsSync(TEST_LOG_PATH)) {
-      fs.chmodSync(TEST_LOG_PATH, 0o644);
-      fs.unlinkSync(TEST_LOG_PATH);
-    }
+    cleanupLogArtifacts(TEST_LOG_PATH);
   });
 
   it('creates a new audit log with genesis hash', () => {
@@ -75,19 +98,19 @@ describe('ComplianceAuditLog', () => {
     const content = fs.readFileSync(TEST_LOG_PATH, 'utf-8');
     const lines = content.split('\n').filter(l => l.trim());
     const entry1 = JSON.parse(lines[0]);
-    // Store original hash to verify it changes
-    const originalHash = entry1.contentHash;
-    // Tamper with data
     entry1.data = { tampered: true };
     // DON'T update contentHash - this is what makes it detectable
     lines[0] = JSON.stringify(entry1);
     fs.writeFileSync(TEST_LOG_PATH, lines.join('\n') + '\n');
 
-    // Verify detects the tampering by recomputing hash
-    const verifyResult = new ComplianceAuditLog({ logPath: TEST_LOG_PATH }).verify();
+    // The standalone verifier returns a structured error rather than throwing.
+    const verifyResult = verifyAuditLog(TEST_LOG_PATH);
     expect(verifyResult.valid).toBe(false);
     expect(verifyResult.error).toContain('Content hash mismatch');
     expect(verifyResult.lastValidSequence).toBe(0);
+
+    // The constructor in strict mode (default) refuses to load a tampered log.
+    expect(() => new ComplianceAuditLog({ logPath: TEST_LOG_PATH })).toThrow(AuditLogIntegrityError);
   });
 
   it('detects broken hash chain', () => {
@@ -143,33 +166,48 @@ describe('ComplianceAuditLog', () => {
     expect(entry3.sequence).toBe(3);
   });
 
-  it('enforces retention policy', () => {
-    const log = new ComplianceAuditLog({
+  it('enforces retention policy via cutoff sidecar (chain stays intact)', () => {
+    // Build a log whose first entry has an old timestamp by faking the system
+    // clock for the first append, then restoring for the second.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(Date.now() - 2 * 24 * 60 * 60 * 1000));
+    let log = new ComplianceAuditLog({
       logPath: TEST_LOG_PATH,
-      retentionDays: 1, // 1 day retention
+      retentionDays: 1,
     });
-
-    // Add an old entry (by writing directly)
-    const oldDate = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(); // 2 days ago
-    const oldEntry = {
-      sequence: 1,
-      timestamp: oldDate,
-      previousHash: GENESIS_HASH,
-      contentHash: 'old-hash',
-      data: { old: true },
-    };
-    fs.appendFileSync(TEST_LOG_PATH, JSON.stringify(oldEntry) + '\n');
-
-    // Add a recent entry
+    log.append({ stepId: 'old' });
+    vi.useRealTimers();
+    // Reconstruct the log so the in-memory state reads the on-disk tail under
+    // the now-real clock (avoids any leftover faked time interactions).
+    log = new ComplianceAuditLog({
+      logPath: TEST_LOG_PATH,
+      retentionDays: 1,
+    });
     log.append({ stepId: 'recent' });
 
+    // Pre-retention: full chain verifies
+    expect(log.verify().valid).toBe(true);
+
     const result = log.enforceRetention();
+    // Old entry (sequence 1) is logically expired; recent entry (2) survives.
     expect(result.removed).toBe(1);
     expect(result.remaining).toBe(1);
 
-    // Verify the remaining entry has a valid chain
+    // Crucially: the on-disk chain is NOT rewritten, so verify still passes.
     const verifyResult = log.verify();
     expect(verifyResult.valid).toBe(true);
+    expect(verifyResult.lastValidSequence).toBe(2);
+
+    // The cutoff sidecar records the boundary.
+    const cutoff = log.getRetentionCutoff();
+    expect(cutoff).not.toBeNull();
+    expect(cutoff!.cutoffSequence).toBe(1);
+
+    // Export filters out the expired entry.
+    const report = log.exportForCompliance();
+    expect(report.entries).toHaveLength(1);
+    expect(report.entries[0].sequence).toBe(2);
+    expect(report.summary.retentionCutoff?.cutoffSequence).toBe(1);
   });
 
   it('exports compliance report', () => {
@@ -222,17 +260,11 @@ describe('ComplianceAuditLog', () => {
 
 describe('Verification API', () => {
   beforeEach(() => {
-    if (fs.existsSync(TEST_LOG_PATH)) {
-      fs.chmodSync(TEST_LOG_PATH, 0o644);
-      fs.unlinkSync(TEST_LOG_PATH);
-    }
+    cleanupLogArtifacts(TEST_LOG_PATH);
   });
 
   afterEach(() => {
-    if (fs.existsSync(TEST_LOG_PATH)) {
-      fs.chmodSync(TEST_LOG_PATH, 0o644);
-      fs.unlinkSync(TEST_LOG_PATH);
-    }
+    cleanupLogArtifacts(TEST_LOG_PATH);
   });
 
   it('verifies a valid log', () => {

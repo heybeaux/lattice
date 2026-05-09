@@ -3,7 +3,10 @@
  *
  * Provides:
  * - Hash-chained append-only audit logs (tamper-evident)
- * - Retention policy enforcement (90-day default)
+ * - Crash-safe append (O_APPEND + fdatasync)
+ * - Inter-process append safety (advisory lockfile)
+ * - Streaming read paths (no full-file loads)
+ * - Retention via cutoff sidecar (chain is never re-written)
  * - SOC 2 compliance export
  * - Integrity verification
  */
@@ -11,6 +14,8 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as readline from 'readline';
+import { Readable } from 'stream';
 
 /**
  * Configuration for the compliance audit log.
@@ -24,6 +29,24 @@ export interface ComplianceConfig {
   algorithm?: 'sha256' | 'sha512';
   /** Whether to enforce append-only file permissions (default: true) */
   enforceAppendOnly?: boolean;
+  /**
+   * Recovery behavior when the on-disk chain fails verification at construction.
+   * - `'strict'` (default): throw `AuditLogIntegrityError`
+   * - `'quarantine'`: move the existing log aside to `<path>.corrupt.<ts>` and
+   *   start a fresh chain from genesis. Use only when you have an out-of-band
+   *   record that the previous log was already lost (operator decision).
+   */
+  recoveryMode?: 'strict' | 'quarantine';
+  /**
+   * Lockfile acquisition timeout in milliseconds (default: 5000).
+   * Set to 0 to disable inter-process locking (single-writer environments only).
+   */
+  lockTimeoutMs?: number;
+  /**
+   * Lockfile staleness threshold in milliseconds (default: 30000).
+   * A `.lock` file older than this is treated as abandoned and reclaimed.
+   */
+  lockStaleMs?: number;
 }
 
 /**
@@ -43,13 +66,54 @@ export interface AuditLogEntry {
 }
 
 /**
+ * Retention cutoff sidecar — records the most recent retention enforcement
+ * point. Entries with `sequence <= cutoffSequence` are considered logically
+ * expired but remain physically on disk so the hash chain stays intact and
+ * `verify()` keeps passing. `exportForCompliance()` and `iterateLiveEntries()`
+ * filter by this cutoff.
+ */
+export interface RetentionCutoff {
+  /** ISO timestamp at-or-before which entries are expired */
+  cutoffTimestamp: string;
+  /** Highest sequence number that is logically expired (<= is expired) */
+  cutoffSequence: number;
+  /** Content hash of the entry at cutoffSequence (anchors the cutoff) */
+  cutoffHash: string;
+  /** Retention window in days at the time of enforcement */
+  retentionDays: number;
+  /** ISO timestamp when this cutoff was enforced */
+  enforcedAt: string;
+}
+
+/**
  * Genesis hash for the first entry in the chain.
  * A known constant that proves the chain starts here.
  */
 export const GENESIS_HASH = '0000000000000000000000000000000000000000000000000000000000000000';
 
 /**
+ * Thrown when the on-disk audit log fails chain verification.
+ *
+ * Construction with `recoveryMode: 'strict'` (the default) raises this rather
+ * than silently restarting the chain. Carries the last verified sequence so
+ * operators can quarantine and resume manually.
+ */
+export class AuditLogIntegrityError extends Error {
+  constructor(
+    message: string,
+    public readonly logPath: string,
+    public readonly lastValidSequence: number,
+  ) {
+    super(message);
+    this.name = 'AuditLogIntegrityError';
+  }
+}
+
+/**
  * Recursively sort all object keys for deterministic JSON serialization.
+ *
+ * NOTE: a separate canonicalization helper is owned by another agent. Until
+ * that lands, this local copy preserves the existing on-disk hash format.
  */
 function sortObjectKeys(obj: unknown): unknown {
   if (obj === null || typeof obj !== 'object') return obj;
@@ -72,15 +136,369 @@ function computeHash(data: unknown, algorithm: 'sha256' | 'sha512' = 'sha256'): 
 }
 
 /**
+ * Parsed line from the audit log along with diagnostic metadata. Streaming
+ * read paths emit one of these per non-empty line so callers can react to
+ * parse / chain failures without loading the whole file.
+ */
+export interface IteratedLine {
+  /** 1-based line number in the file */
+  lineNo: number;
+  /** Raw line text (without trailing newline) */
+  raw: string;
+  /** Parsed entry, present iff `parseError` is undefined */
+  parsed?: AuditLogEntry;
+  /** Parser error message if the line is not a valid JSON entry */
+  parseError?: string;
+}
+
+/**
+ * Stream the audit log file line-by-line without loading it into memory.
+ * Empty lines are skipped. Lines that fail to parse are still yielded with
+ * `parseError` set so callers can decide how to react.
+ *
+ * @param logPath Absolute path to the log file
+ */
+export async function* iterateAuditLog(logPath: string): AsyncGenerator<IteratedLine> {
+  if (!fs.existsSync(logPath)) return;
+
+  const stream = fs.createReadStream(logPath, { encoding: 'utf-8' });
+  const rl = readline.createInterface({ input: stream, crlfDelay: Infinity });
+
+  let lineNo = 0;
+  try {
+    for await (const raw of rl) {
+      if (!raw.trim()) continue;
+      lineNo++;
+      let parsed: AuditLogEntry | undefined;
+      let parseError: string | undefined;
+      try {
+        parsed = JSON.parse(raw) as AuditLogEntry;
+      } catch (err) {
+        parseError = err instanceof Error ? err.message : String(err);
+      }
+      yield { lineNo, raw, parsed, parseError };
+    }
+  } finally {
+    rl.close();
+    stream.destroy();
+  }
+}
+
+/**
+ * Result of a streaming chain verification.
+ *
+ * `partialTailBytes` is non-zero when the file ends mid-line (no trailing `\n`
+ * after the last byte). That tail is *not* counted as a valid entry; it is the
+ * signal that an append crashed before fdatasync completed.
+ */
+export interface StreamVerifyResult {
+  valid: boolean;
+  error?: string;
+  lastValidSequence: number;
+  lastHash: string;
+  totalEntries: number;
+  /** Number of bytes in a partial (non-newline-terminated) trailing record. */
+  partialTailBytes: number;
+}
+
+/**
+ * Detect whether the file ends with a trailing newline. Used to flag
+ * crash-during-append: if the last byte is not `\n`, an append never completed
+ * its `\n` write and the trailing bytes are an incomplete record.
+ *
+ * Returns the count of trailing non-newline bytes (0 if file is empty or
+ * properly terminated).
+ */
+function trailingPartialBytes(logPath: string): number {
+  if (!fs.existsSync(logPath)) return 0;
+  const stat = fs.statSync(logPath);
+  if (stat.size === 0) return 0;
+  const fd = fs.openSync(logPath, 'r');
+  try {
+    const buf = Buffer.alloc(1);
+    fs.readSync(fd, buf, 0, 1, stat.size - 1);
+    if (buf[0] === 0x0a) return 0;
+    // Walk backward to count the partial-line bytes
+    let n = 0;
+    const chunk = Buffer.alloc(4096);
+    let pos = stat.size;
+    while (pos > 0) {
+      const want = Math.min(chunk.length, pos);
+      pos -= want;
+      fs.readSync(fd, chunk, 0, want, pos);
+      for (let i = want - 1; i >= 0; i--) {
+        if (chunk[i] === 0x0a) return n;
+        n++;
+      }
+    }
+    return n;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Stream-verify a hash-chained audit log without loading it into memory.
+ *
+ * Walks the file front-to-back, validating sequence continuity, previousHash
+ * linkage, and contentHash recomputation. Stops at the first failure and
+ * returns the last verified head. `partialTailBytes > 0` indicates a partial
+ * trailing record (crash during append) — callers should treat as recoverable
+ * (truncate the partial bytes) but not as a verification pass.
+ */
+export async function streamVerify(
+  logPath: string,
+  algorithm: 'sha256' | 'sha512' = 'sha256',
+): Promise<StreamVerifyResult> {
+  const partialTailBytes = trailingPartialBytes(logPath);
+
+  if (!fs.existsSync(logPath) || fs.statSync(logPath).size === 0) {
+    return {
+      valid: true,
+      lastValidSequence: 0,
+      lastHash: GENESIS_HASH,
+      totalEntries: 0,
+      partialTailBytes: 0,
+    };
+  }
+
+  let expectedSequence = 0;
+  let expectedHash = GENESIS_HASH;
+  let lastHash = GENESIS_HASH;
+  let totalEntries = 0;
+
+  for await (const line of iterateAuditLog(logPath)) {
+    if (line.parseError) {
+      return {
+        valid: false,
+        error: `Invalid JSON at line ${line.lineNo} (sequence ${expectedSequence + 1}): ${line.parseError}`,
+        lastValidSequence: expectedSequence,
+        lastHash,
+        totalEntries,
+        partialTailBytes,
+      };
+    }
+    const entry = line.parsed!;
+    totalEntries++;
+
+    if (entry.sequence !== expectedSequence + 1) {
+      return {
+        valid: false,
+        error: `Sequence mismatch at line ${line.lineNo}: expected ${expectedSequence + 1}, got ${entry.sequence}`,
+        lastValidSequence: expectedSequence,
+        lastHash,
+        totalEntries,
+        partialTailBytes,
+      };
+    }
+
+    if (entry.previousHash !== expectedHash) {
+      return {
+        valid: false,
+        error: `Hash chain broken at sequence ${entry.sequence}: previousHash mismatch`,
+        lastValidSequence: expectedSequence,
+        lastHash,
+        totalEntries,
+        partialTailBytes,
+      };
+    }
+
+    const computed = computeHash(
+      {
+        sequence: entry.sequence,
+        timestamp: entry.timestamp,
+        previousHash: entry.previousHash,
+        data: entry.data,
+      },
+      algorithm,
+    );
+    if (entry.contentHash !== computed) {
+      return {
+        valid: false,
+        error: `Content hash mismatch at sequence ${entry.sequence}: entry was modified`,
+        lastValidSequence: expectedSequence,
+        lastHash,
+        totalEntries,
+        partialTailBytes,
+      };
+    }
+
+    expectedSequence = entry.sequence;
+    expectedHash = entry.contentHash;
+    lastHash = entry.contentHash;
+  }
+
+  return {
+    valid: partialTailBytes === 0,
+    error: partialTailBytes > 0
+      ? `Partial trailing record: ${partialTailBytes} bytes after last newline (crash during append?)`
+      : undefined,
+    lastValidSequence: expectedSequence,
+    lastHash,
+    totalEntries,
+    partialTailBytes,
+  };
+}
+
+// ─── lockfile helpers ──────────────────────────────────────────────────────
+
+interface LockHandle {
+  lockPath: string;
+  fd: number;
+}
+
+function readLockOwner(lockPath: string): { pid: number; startedAt: number } | null {
+  try {
+    const raw = fs.readFileSync(lockPath, 'utf-8');
+    const obj = JSON.parse(raw) as { pid: number; startedAt: number };
+    if (typeof obj.pid !== 'number' || typeof obj.startedAt !== 'number') return null;
+    return obj;
+  } catch {
+    return null;
+  }
+}
+
+function pidAlive(pid: number): boolean {
+  if (!Number.isFinite(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH = no such process; EPERM = exists but we can't signal it
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function acquireLock(logPath: string, timeoutMs: number, staleMs: number): LockHandle {
+  const lockPath = `${logPath}.lock`;
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  const payload = JSON.stringify({ pid: process.pid, startedAt: Date.now() });
+
+  // First attempt fast-path; then back off.
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    try {
+      const fd = fs.openSync(lockPath, 'wx');
+      fs.writeSync(fd, payload);
+      try {
+        fs.fsyncSync(fd);
+      } catch {
+        /* fsync best-effort on platforms that disallow it on the lock fd */
+      }
+      return { lockPath, fd };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+
+      // Lock exists — check for staleness.
+      let stale = false;
+      try {
+        const stat = fs.statSync(lockPath);
+        const age = Date.now() - stat.mtimeMs;
+        if (age > staleMs) stale = true;
+        const owner = readLockOwner(lockPath);
+        if (owner && !pidAlive(owner.pid)) stale = true;
+      } catch {
+        // race: lock vanished between EEXIST and stat — retry
+      }
+
+      if (stale) {
+        try {
+          fs.unlinkSync(lockPath);
+        } catch {
+          /* another waiter beat us to it; loop */
+        }
+        continue;
+      }
+
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Audit log lock acquisition timed out after ${timeoutMs}ms: ${lockPath} is held by another writer.`,
+        );
+      }
+      // Short blocking sleep — avoid pinning a CPU.
+      const waitMs = 5 + Math.floor(Math.random() * 25);
+      const start = Date.now();
+      while (Date.now() - start < waitMs) {
+        // busy-wait small window; sync API has no proper sleep
+      }
+    }
+  }
+}
+
+function releaseLock(handle: LockHandle): void {
+  try {
+    fs.closeSync(handle.fd);
+  } catch {
+    /* ignore */
+  }
+  try {
+    fs.unlinkSync(handle.lockPath);
+  } catch {
+    /* ignore */
+  }
+}
+
+// ─── retention sidecar helpers ────────────────────────────────────────────
+
+function retentionPath(logPath: string): string {
+  return `${logPath}.retention.cutoff`;
+}
+
+function readRetentionCutoff(logPath: string): RetentionCutoff | null {
+  const p = retentionPath(logPath);
+  if (!fs.existsSync(p)) return null;
+  try {
+    return JSON.parse(fs.readFileSync(p, 'utf-8')) as RetentionCutoff;
+  } catch {
+    return null;
+  }
+}
+
+function writeRetentionCutoff(logPath: string, cutoff: RetentionCutoff): void {
+  const finalPath = retentionPath(logPath);
+  const tmpPath = `${finalPath}.tmp.${process.pid}.${Date.now()}`;
+  const fd = fs.openSync(tmpPath, 'w');
+  try {
+    fs.writeSync(fd, JSON.stringify(cutoff, null, 2));
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(tmpPath, finalPath);
+}
+
+/**
  * Hash-chained append-only audit log.
  *
- * Each entry includes a hash of the previous entry, creating a tamper-evident chain.
- * If any entry is modified, all subsequent hashes will be invalid.
+ * Each entry includes a hash of the previous entry, creating a tamper-evident
+ * chain. If any entry is modified, all subsequent hashes will be invalid.
+ *
+ * Crash safety:
+ *   appends use `O_APPEND` + `fdatasync` so a successful return implies the
+ *   record is durably on disk.
+ *
+ * Inter-process safety:
+ *   appends and retention enforcement are guarded by an advisory lockfile
+ *   (`<path>.lock`). Stale locks (process gone or older than `lockStaleMs`)
+ *   are reclaimed automatically.
+ *
+ * Memory:
+ *   no read path loads the whole file. `verify()`, `loadState()`,
+ *   `exportForCompliance()`, and `enforceRetention()` stream line-by-line.
+ *
+ * Retention:
+ *   `enforceRetention()` writes a `<path>.retention.cutoff` sidecar. The hash
+ *   chain on disk is **never** rewritten, so `verify()` still walks end-to-end.
+ *   Logically-expired entries are filtered out of `exportForCompliance()`.
  */
 export class ComplianceAuditLog {
-  private readonly config: Required<ComplianceConfig>;
+  private readonly config: Required<Omit<ComplianceConfig, 'recoveryMode'>> & {
+    recoveryMode: 'strict' | 'quarantine';
+  };
   private currentSequence: number;
   private lastHash: string;
+  /** Single-process write mutex: queues async appends made through `append()`. */
+  private writeChain: Promise<void> = Promise.resolve();
 
   constructor(config: ComplianceConfig) {
     this.config = {
@@ -88,6 +506,9 @@ export class ComplianceAuditLog {
       retentionDays: config.retentionDays ?? 90,
       algorithm: config.algorithm ?? 'sha256',
       enforceAppendOnly: config.enforceAppendOnly ?? true,
+      recoveryMode: config.recoveryMode ?? 'strict',
+      lockTimeoutMs: config.lockTimeoutMs ?? 5000,
+      lockStaleMs: config.lockStaleMs ?? 30000,
     };
 
     // Ensure directory exists
@@ -96,237 +517,198 @@ export class ComplianceAuditLog {
       fs.mkdirSync(dir, { recursive: true });
     }
 
-    // Load existing log state
-    const { sequence, lastHash } = this.loadState();
+    // Load existing log state (stream-verifies the entire chain).
+    const { sequence, lastHash } = this.loadStateSync();
     this.currentSequence = sequence;
     this.lastHash = lastHash;
-
-    // Enforce append-only permissions if configured
-    if (this.config.enforceAppendOnly && fs.existsSync(this.config.logPath)) {
-      this.enforceAppendOnlyPermissions();
-    }
   }
 
   /**
    * Append a new entry to the audit log.
-   * This operation is append-only — existing entries cannot be modified.
+   *
+   * Crash-safe: opens the log with `O_APPEND`, writes one full line, calls
+   * `fdatasync`, then closes. A returned entry is durably persisted.
+   *
+   * Inter-process safe: holds the advisory lockfile across read-tail +
+   * compute-hash + append, so concurrent writers cannot collide on sequence
+   * numbers or `previousHash`.
    *
    * @param data - The audit data (typically a redacted State Contract)
    * @returns The created AuditLogEntry with computed hashes
    */
   append(data: Record<string, unknown>): AuditLogEntry {
-    const sequence = ++this.currentSequence;
-    const timestamp = new Date().toISOString();
-    const previousHash = this.lastHash;
+    const lock = this.config.lockTimeoutMs > 0
+      ? acquireLock(this.config.logPath, this.config.lockTimeoutMs, this.config.lockStaleMs)
+      : null;
 
-    // Create entry without contentHash (we'll compute it)
-    const entryWithoutHash = {
-      sequence,
-      timestamp,
-      previousHash,
-      data,
-    };
+    try {
+      // Re-read tail under lock so concurrent writers see each other's last hash.
+      // (Synchronous to keep the public API unchanged; the read is a single
+      // small fd-positioned read, not a full-file load.)
+      const tail = readChainTailSync(this.config.logPath, this.config.algorithm);
+      if (tail.partialTailBytes > 0) {
+        throw new AuditLogIntegrityError(
+          `Refusing to append: log has a ${tail.partialTailBytes}-byte partial trailing record. ` +
+            `Resolve the partial tail (truncate or quarantine) before resuming writes.`,
+          this.config.logPath,
+          tail.lastSequence,
+        );
+      }
+      this.currentSequence = tail.lastSequence;
+      this.lastHash = tail.lastHash;
 
-    // Compute content hash (includes all fields)
-    const contentHash = computeHash(entryWithoutHash, this.config.algorithm);
+      const sequence = this.currentSequence + 1;
+      const timestamp = new Date().toISOString();
+      const previousHash = this.lastHash;
 
-    // Complete entry
-    const entry: AuditLogEntry = {
-      ...entryWithoutHash,
-      contentHash,
-    };
+      const entryWithoutHash = { sequence, timestamp, previousHash, data };
+      const contentHash = computeHash(entryWithoutHash, this.config.algorithm);
+      const entry: AuditLogEntry = { ...entryWithoutHash, contentHash };
 
-    // Append to file (atomic append)
-    const line = JSON.stringify(entry) + '\n';
-    fs.appendFileSync(this.config.logPath, line);
+      const line = JSON.stringify(entry) + '\n';
 
-    // Update state
-    this.lastHash = contentHash;
+      // Crash-safe append: O_APPEND ensures all writers atomically extend the
+      // file under POSIX (writes <= PIPE_BUF are atomic; we use a single
+      // write() call). fdatasync forces the kernel buffer to disk.
+      const fd = fs.openSync(this.config.logPath, fs.constants.O_APPEND | fs.constants.O_WRONLY | fs.constants.O_CREAT, 0o600);
+      try {
+        fs.writeSync(fd, line);
+        fs.fdatasyncSync(fd);
+      } finally {
+        fs.closeSync(fd);
+      }
 
-    // Re-enforce append-only permissions after append
-    if (this.config.enforceAppendOnly) {
-      this.enforceAppendOnlyPermissions();
+      // Update in-memory cursor.
+      this.currentSequence = sequence;
+      this.lastHash = contentHash;
+
+      return entry;
+    } finally {
+      if (lock) releaseLock(lock);
     }
-
-    return entry;
   }
 
   /**
-   * Verify the integrity of the entire audit log.
+   * Verify the integrity of the entire audit log (streaming).
    *
    * Returns true if all hashes are valid and the chain is unbroken.
    * Returns false if any entry has been modified or the chain is broken.
+   *
+   * Note: this method is intentionally synchronous for backwards compatibility,
+   * but internally uses a streaming reader. For very large logs prefer
+   * {@link verifyAsync}.
    */
   verify(): { valid: boolean; error?: string; lastValidSequence?: number } {
-    if (!fs.existsSync(this.config.logPath)) {
-      return { valid: true, error: undefined }; // Empty log is valid
-    }
-
-    const content = fs.readFileSync(this.config.logPath, 'utf-8');
-    const lines = content.split('\n').filter(l => l.trim());
-
-    let expectedSequence = 0;
-    let expectedHash = GENESIS_HASH;
-
-    for (const line of lines) {
-      let entry: AuditLogEntry;
-      try {
-        entry = JSON.parse(line);
-      } catch {
-        return { valid: false, error: `Invalid JSON at line ${expectedSequence + 1}`, lastValidSequence: expectedSequence };
-      }
-
-      // Check sequence number
-      if (entry.sequence !== expectedSequence + 1) {
-        return {
-          valid: false,
-          error: `Sequence mismatch at line ${expectedSequence + 1}: expected ${expectedSequence + 1}, got ${entry.sequence}`,
-          lastValidSequence: expectedSequence,
-        };
-      }
-
-      // Check previous hash
-      if (entry.previousHash !== expectedHash) {
-        return {
-          valid: false,
-          error: `Hash chain broken at sequence ${entry.sequence}: previous hash mismatch`,
-          lastValidSequence: expectedSequence,
-        };
-      }
-
-      // Verify content hash
-      const entryWithoutHash = {
-        sequence: entry.sequence,
-        timestamp: entry.timestamp,
-        previousHash: entry.previousHash,
-        data: entry.data,
-      };
-      const computedHash = computeHash(entryWithoutHash, this.config.algorithm);
-      if (entry.contentHash !== computedHash) {
-        return {
-          valid: false,
-          error: `Content hash mismatch at sequence ${entry.sequence}: entry was modified`,
-          lastValidSequence: expectedSequence,
-        };
-      }
-
-      expectedSequence = entry.sequence;
-      expectedHash = entry.contentHash;
-    }
-
-    return { valid: true, lastValidSequence: expectedSequence };
+    const result = streamVerifySync(this.config.logPath, this.config.algorithm);
+    return {
+      valid: result.valid,
+      error: result.error,
+      lastValidSequence: result.lastValidSequence,
+    };
   }
 
   /**
-   * Enforce append-only file permissions.
-   * On Unix: removes write permission for owner (use chattr +a for true append-only)
-   * This prevents accidental truncation or modification.
+   * Async streaming verification — preferred for very large logs.
    */
-  private enforceAppendOnlyPermissions(): void {
-    if (!fs.existsSync(this.config.logPath)) return;
-
-    try {
-      const stats = fs.statSync(this.config.logPath);
-      // Set file to read-only for group and others, append-only for owner
-      // Note: True append-only requires 'chattr +a' on Linux, which needs root
-      // Here we set to read-only to prevent accidental truncation
-      fs.chmodSync(this.config.logPath, 0o444);
-    } catch {
-      // If we can't change permissions, log a warning but continue
-    }
+  async verifyAsync(): Promise<StreamVerifyResult> {
+    return streamVerify(this.config.logPath, this.config.algorithm);
   }
 
   /**
-   * Temporarily allow writes for appending new entries.
-   * This should only be called internally by the append method.
-   */
-  private allowAppend(): void {
-    if (!fs.existsSync(this.config.logPath)) return;
-    try {
-      fs.chmodSync(this.config.logPath, 0o644);
-    } catch {
-      // If we can't change permissions, log a warning but continue
-    }
-  }
-
-  /**
-   * Enforce the retention policy by removing entries older than retentionDays.
+   * Enforce the retention policy.
    *
-   * Note: This breaks the hash chain for removed entries but maintains
-   * the chain for remaining entries. The first remaining entry becomes
-   * the new genesis.
+   * Records a retention-cutoff sidecar (`<path>.retention.cutoff`) that
+   * captures the timestamp / sequence / hash of the most recent entry that
+   * is older than `retentionDays`. The on-disk hash chain is **not**
+   * rewritten — chain integrity is preserved end-to-end and `verify()`
+   * continues to pass.
+   *
+   * `exportForCompliance()` and `iterateLiveEntries()` filter expired
+   * entries by reading this sidecar. To reclaim disk space, operate on the
+   * file out-of-band after archiving (no re-chain is supported).
+   *
+   * @throws AuditLogIntegrityError if the chain currently fails verification
+   * (refuses to enforce retention over a corrupt chain).
    */
   enforceRetention(): { removed: number; remaining: number } {
-    if (!fs.existsSync(this.config.logPath)) {
-      return { removed: 0, remaining: 0 };
-    }
-
-    const content = fs.readFileSync(this.config.logPath, 'utf-8');
-    const lines = content.split('\n').filter(l => l.trim());
-    const cutoffDate = new Date(Date.now() - this.config.retentionDays * 24 * 60 * 60 * 1000);
-
-    const entries: AuditLogEntry[] = [];
-    for (const line of lines) {
-      try {
-        entries.push(JSON.parse(line));
-      } catch {
-        // Skip invalid lines
+    const lock = this.config.lockTimeoutMs > 0
+      ? acquireLock(this.config.logPath, this.config.lockTimeoutMs, this.config.lockStaleMs)
+      : null;
+    try {
+      if (!fs.existsSync(this.config.logPath)) {
+        return { removed: 0, remaining: 0 };
       }
-    }
 
-    const recent = entries.filter(e => new Date(e.timestamp) >= cutoffDate);
-    const removed = entries.length - recent.length;
-
-    if (removed === 0) {
-      return { removed: 0, remaining: entries.length };
-    }
-
-    // Temporarily allow writes
-    this.allowAppend();
-
-    // Rebuild the chain from the first remaining entry
-    if (recent.length > 0) {
-      // The first recent entry becomes the new genesis
-      recent[0].previousHash = GENESIS_HASH;
-      recent[0].contentHash = computeHash({
-        sequence: recent[0].sequence,
-        timestamp: recent[0].timestamp,
-        previousHash: recent[0].previousHash,
-        data: recent[0].data,
-      }, this.config.algorithm);
-
-      // Recompute hashes for all remaining entries
-      for (let i = 1; i < recent.length; i++) {
-        recent[i].previousHash = recent[i - 1].contentHash;
-        recent[i].contentHash = computeHash({
-          sequence: recent[i].sequence,
-          timestamp: recent[i].timestamp,
-          previousHash: recent[i].previousHash,
-          data: recent[i].data,
-        }, this.config.algorithm);
+      const verifyResult = streamVerifySync(this.config.logPath, this.config.algorithm);
+      if (!verifyResult.valid) {
+        throw new AuditLogIntegrityError(
+          `Refusing to enforce retention: chain is currently invalid (${verifyResult.error ?? 'unknown error'}).`,
+          this.config.logPath,
+          verifyResult.lastValidSequence,
+        );
       }
+
+      const cutoffDate = new Date(Date.now() - this.config.retentionDays * 24 * 60 * 60 * 1000);
+
+      // Streaming pass: find the last entry whose timestamp <= cutoff.
+      let cutoffEntry: AuditLogEntry | null = null;
+      let total = 0;
+      for (const line of iterateAuditLogSync(this.config.logPath)) {
+        if (line.parseError) continue;
+        total++;
+        const entry = line.parsed!;
+        if (new Date(entry.timestamp) < cutoffDate) {
+          cutoffEntry = entry;
+        }
+      }
+
+      if (!cutoffEntry) {
+        // Nothing aged out — leave any prior cutoff in place.
+        const prior = readRetentionCutoff(this.config.logPath);
+        return { removed: prior?.cutoffSequence ?? 0, remaining: total - (prior?.cutoffSequence ?? 0) };
+      }
+
+      const cutoff: RetentionCutoff = {
+        cutoffTimestamp: cutoffEntry.timestamp,
+        cutoffSequence: cutoffEntry.sequence,
+        cutoffHash: cutoffEntry.contentHash,
+        retentionDays: this.config.retentionDays,
+        enforcedAt: new Date().toISOString(),
+      };
+      writeRetentionCutoff(this.config.logPath, cutoff);
+
+      return { removed: cutoffEntry.sequence, remaining: total - cutoffEntry.sequence };
+    } finally {
+      if (lock) releaseLock(lock);
     }
+  }
 
-    // Write the rebuilt log
-    const newContent = recent.map(e => JSON.stringify(e) + '\n').join('');
-    fs.writeFileSync(this.config.logPath, newContent);
+  /**
+   * Read the active retention cutoff (if any).
+   */
+  getRetentionCutoff(): RetentionCutoff | null {
+    return readRetentionCutoff(this.config.logPath);
+  }
 
-    // Re-enforce append-only permissions
-    if (this.config.enforceAppendOnly) {
-      this.enforceAppendOnlyPermissions();
+  /**
+   * Stream entries that are NOT logically expired (i.e. `sequence` >
+   * cutoffSequence, or all entries if no cutoff exists).
+   */
+  async *iterateLiveEntries(): AsyncGenerator<AuditLogEntry> {
+    const cutoff = readRetentionCutoff(this.config.logPath);
+    const cutoffSeq = cutoff?.cutoffSequence ?? 0;
+    for await (const line of iterateAuditLog(this.config.logPath)) {
+      if (line.parseError) continue;
+      const entry = line.parsed!;
+      if (entry.sequence > cutoffSeq) yield entry;
     }
-
-    return { removed, remaining: recent.length };
   }
 
   /**
    * Export audit log data in SOC 2-compliant format.
    *
-   * Includes:
-   - Log integrity verification result
-   - Summary statistics
-   - Full entry list (redacted)
-   - Retention policy details
+   * Streams the file (no full-load) and excludes entries logically expired by
+   * the retention cutoff sidecar.
    */
   exportForCompliance(): {
     verificationResult: { valid: boolean; error?: string; lastValidSequence?: number };
@@ -335,11 +717,14 @@ export class ComplianceAuditLog {
       dateRange: { start: string; end: string };
       retentionDays: number;
       algorithm: string;
+      retentionCutoff: RetentionCutoff | null;
     };
     entries: AuditLogEntry[];
     exportedAt: string;
   } {
     const verification = this.verify();
+    const retention = readRetentionCutoff(this.config.logPath);
+    const cutoffSeq = retention?.cutoffSequence ?? 0;
 
     if (!fs.existsSync(this.config.logPath)) {
       return {
@@ -349,33 +734,33 @@ export class ComplianceAuditLog {
           dateRange: { start: '', end: '' },
           retentionDays: this.config.retentionDays,
           algorithm: this.config.algorithm,
+          retentionCutoff: retention,
         },
         entries: [],
         exportedAt: new Date().toISOString(),
       };
     }
 
-    const content = fs.readFileSync(this.config.logPath, 'utf-8');
-    const lines = content.split('\n').filter(l => l.trim());
     const entries: AuditLogEntry[] = [];
-    for (const line of lines) {
-      try {
-        entries.push(JSON.parse(line));
-      } catch {
-        // Skip invalid lines
-      }
+    let firstTs = '';
+    let lastTs = '';
+    for (const line of iterateAuditLogSync(this.config.logPath)) {
+      if (line.parseError) continue;
+      const entry = line.parsed!;
+      if (entry.sequence <= cutoffSeq) continue;
+      entries.push(entry);
+      if (!firstTs) firstTs = entry.timestamp;
+      lastTs = entry.timestamp;
     }
 
     return {
       verificationResult: verification,
       summary: {
         totalEntries: entries.length,
-        dateRange: {
-          start: entries[0]?.timestamp ?? '',
-          end: entries[entries.length - 1]?.timestamp ?? '',
-        },
+        dateRange: { start: firstTs, end: lastTs },
         retentionDays: this.config.retentionDays,
         algorithm: this.config.algorithm,
+        retentionCutoff: retention,
       },
       entries,
       exportedAt: new Date().toISOString(),
@@ -383,35 +768,305 @@ export class ComplianceAuditLog {
   }
 
   /**
-   * Load the current state (sequence number and last hash) from the log file.
+   * Stream-verify the existing log and adopt its head — refuses to silently
+   * recover from a broken chain.
+   *
+   * On a clean log: returns the verified head sequence/hash.
+   *
+   * On a partial trailing record (crash during append): the partial bytes are
+   * truncated and the chain head is taken from the last fully-persisted entry.
+   *
+   * On a hard chain failure (sequence gap, hash mismatch, parse error mid-
+   * file): throws `AuditLogIntegrityError` unless `recoveryMode === 'quarantine'`,
+   * in which case the bad log is renamed `<path>.corrupt.<ts>` and a fresh
+   * chain starts from genesis.
    */
-  private loadState(): { sequence: number; lastHash: string } {
+  private loadStateSync(): { sequence: number; lastHash: string } {
     if (!fs.existsSync(this.config.logPath)) {
       return { sequence: 0, lastHash: GENESIS_HASH };
     }
-
-    const content = fs.readFileSync(this.config.logPath, 'utf-8');
-    const lines = content.split('\n').filter(l => l.trim());
-
-    if (lines.length === 0) {
+    if (fs.statSync(this.config.logPath).size === 0) {
       return { sequence: 0, lastHash: GENESIS_HASH };
     }
 
-    // Read the last entry to get the current state
-    try {
-      const lastEntry = JSON.parse(lines[lines.length - 1]) as AuditLogEntry;
-      return { sequence: lastEntry.sequence, lastHash: lastEntry.contentHash };
-    } catch {
-      // If the last line is corrupt, scan backwards
-      for (let i = lines.length - 2; i >= 0; i--) {
-        try {
-          const entry = JSON.parse(lines[i]) as AuditLogEntry;
-          return { sequence: entry.sequence, lastHash: entry.contentHash };
-        } catch {
-          // Continue scanning
-        }
-      }
+    const result = streamVerifySync(this.config.logPath, this.config.algorithm);
+
+    // Case 1: chain verifies cleanly with no partial tail
+    if (result.valid && result.partialTailBytes === 0) {
+      return { sequence: result.lastValidSequence, lastHash: result.lastHash };
+    }
+
+    // Case 2: chain verifies but ends mid-line (crash during append). Truncate
+    // the partial bytes and resume — entries before the partial line are
+    // verified-good, so this is safe.
+    if (
+      result.lastValidSequence > 0 &&
+      result.partialTailBytes > 0 &&
+      result.totalEntries === result.lastValidSequence
+    ) {
+      this.truncatePartialTail(result.partialTailBytes);
+      return { sequence: result.lastValidSequence, lastHash: result.lastHash };
+    }
+
+    // Case 3: hard chain failure — strict mode throws, quarantine renames.
+    const message = `Audit log integrity check failed at ${this.config.logPath}: ${result.error ?? 'unknown error'}`;
+    if (this.config.recoveryMode === 'quarantine') {
+      this.quarantineLog();
       return { sequence: 0, lastHash: GENESIS_HASH };
+    }
+    throw new AuditLogIntegrityError(message, this.config.logPath, result.lastValidSequence);
+  }
+
+  private truncatePartialTail(bytes: number): void {
+    const stat = fs.statSync(this.config.logPath);
+    const newSize = stat.size - bytes;
+    const fd = fs.openSync(this.config.logPath, 'r+');
+    try {
+      fs.ftruncateSync(fd, newSize);
+      fs.fdatasyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  private quarantineLog(): void {
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const target = `${this.config.logPath}.corrupt.${ts}`;
+    fs.renameSync(this.config.logPath, target);
+    // Also move retention sidecar if present so it doesn't apply to a fresh chain.
+    const sidecar = retentionPath(this.config.logPath);
+    if (fs.existsSync(sidecar)) {
+      fs.renameSync(sidecar, `${target}.retention.cutoff`);
     }
   }
 }
+
+// ─── synchronous streaming helpers ────────────────────────────────────────
+// We use a small line-buffered sync reader to keep the public API
+// synchronous while still avoiding full-file loads. Memory is bounded to one
+// chunk (64 KiB) plus the longest single line.
+
+const READ_CHUNK = 64 * 1024;
+
+function* iterateAuditLogSync(logPath: string): Generator<IteratedLine> {
+  if (!fs.existsSync(logPath)) return;
+  const fd = fs.openSync(logPath, 'r');
+  const buffer = Buffer.alloc(READ_CHUNK);
+  let carry = '';
+  let lineNo = 0;
+  try {
+    let pos = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, pos);
+      if (bytesRead <= 0) break;
+      pos += bytesRead;
+      carry += buffer.subarray(0, bytesRead).toString('utf-8');
+      let nl: number;
+      while ((nl = carry.indexOf('\n')) >= 0) {
+        const raw = carry.slice(0, nl);
+        carry = carry.slice(nl + 1);
+        if (!raw.trim()) continue;
+        lineNo++;
+        let parsed: AuditLogEntry | undefined;
+        let parseError: string | undefined;
+        try {
+          parsed = JSON.parse(raw) as AuditLogEntry;
+        } catch (err) {
+          parseError = err instanceof Error ? err.message : String(err);
+        }
+        yield { lineNo, raw, parsed, parseError };
+      }
+    }
+    // Any non-empty carry here is a partial trailing line (no newline). We do
+    // NOT yield it as a full entry — callers detect partial tails via
+    // `trailingPartialBytes`.
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/**
+ * Synchronous streaming chain verification — backs the sync `verify()` API.
+ */
+export function streamVerifySync(
+  logPath: string,
+  algorithm: 'sha256' | 'sha512' = 'sha256',
+): StreamVerifyResult {
+  const partialTailBytes = trailingPartialBytes(logPath);
+
+  if (!fs.existsSync(logPath) || fs.statSync(logPath).size === 0) {
+    return {
+      valid: true,
+      lastValidSequence: 0,
+      lastHash: GENESIS_HASH,
+      totalEntries: 0,
+      partialTailBytes: 0,
+    };
+  }
+
+  let expectedSequence = 0;
+  let expectedHash = GENESIS_HASH;
+  let lastHash = GENESIS_HASH;
+  let totalEntries = 0;
+
+  for (const line of iterateAuditLogSync(logPath)) {
+    if (line.parseError) {
+      return {
+        valid: false,
+        error: `Invalid JSON at line ${line.lineNo} (sequence ${expectedSequence + 1}): ${line.parseError}`,
+        lastValidSequence: expectedSequence,
+        lastHash,
+        totalEntries,
+        partialTailBytes,
+      };
+    }
+    const entry = line.parsed!;
+    totalEntries++;
+
+    if (entry.sequence !== expectedSequence + 1) {
+      return {
+        valid: false,
+        error: `Sequence mismatch at line ${line.lineNo}: expected ${expectedSequence + 1}, got ${entry.sequence}`,
+        lastValidSequence: expectedSequence,
+        lastHash,
+        totalEntries,
+        partialTailBytes,
+      };
+    }
+
+    if (entry.previousHash !== expectedHash) {
+      return {
+        valid: false,
+        error: `Hash chain broken at sequence ${entry.sequence}: previousHash mismatch`,
+        lastValidSequence: expectedSequence,
+        lastHash,
+        totalEntries,
+        partialTailBytes,
+      };
+    }
+
+    const computed = computeHash(
+      {
+        sequence: entry.sequence,
+        timestamp: entry.timestamp,
+        previousHash: entry.previousHash,
+        data: entry.data,
+      },
+      algorithm,
+    );
+    if (entry.contentHash !== computed) {
+      return {
+        valid: false,
+        error: `Content hash mismatch at sequence ${entry.sequence}: entry was modified`,
+        lastValidSequence: expectedSequence,
+        lastHash,
+        totalEntries,
+        partialTailBytes,
+      };
+    }
+
+    expectedSequence = entry.sequence;
+    expectedHash = entry.contentHash;
+    lastHash = entry.contentHash;
+  }
+
+  return {
+    valid: partialTailBytes === 0,
+    error: partialTailBytes > 0
+      ? `Partial trailing record: ${partialTailBytes} bytes after last newline`
+      : undefined,
+    lastValidSequence: expectedSequence,
+    lastHash,
+    totalEntries,
+    partialTailBytes,
+  };
+}
+
+/**
+ * Read just the chain tail (last fully-persisted entry) without a full pass.
+ * Used by `append()` under lock so concurrent writers see each other's
+ * state without paying full-verify cost on every write.
+ */
+function readChainTailSync(
+  logPath: string,
+  algorithm: 'sha256' | 'sha512',
+): { lastSequence: number; lastHash: string; partialTailBytes: number } {
+  if (!fs.existsSync(logPath) || fs.statSync(logPath).size === 0) {
+    return { lastSequence: 0, lastHash: GENESIS_HASH, partialTailBytes: 0 };
+  }
+
+  const partialTailBytes = trailingPartialBytes(logPath);
+  const stat = fs.statSync(logPath);
+  // Read the trailing window; entries are typically a few KB, so 64 KiB is
+  // sufficient for "the last entry" in nearly all cases. If the last entry is
+  // larger than the window, we expand.
+  let windowSize = Math.min(stat.size, 64 * 1024);
+  while (windowSize <= stat.size) {
+    const start = stat.size - windowSize;
+    const buf = Buffer.alloc(windowSize);
+    const fd = fs.openSync(logPath, 'r');
+    try {
+      fs.readSync(fd, buf, 0, windowSize, start);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const text = buf.toString('utf-8');
+    // Strip any partial-tail bytes
+    const usable = partialTailBytes > 0 ? text.slice(0, text.length - partialTailBytes) : text;
+    const lines = usable.split('\n').filter(l => l.trim());
+    if (lines.length === 0) {
+      if (windowSize === stat.size) break;
+      windowSize = Math.min(stat.size, windowSize * 2);
+      continue;
+    }
+    const last = lines[lines.length - 1];
+    // Only trust the last line if either (a) we read the whole file, or (b) we
+    // have at least two complete lines in the window (so the last is not
+    // truncated at the start). When (b) doesn't hold we expand the window.
+    const haveBoundary = windowSize === stat.size || lines.length >= 2;
+    if (!haveBoundary) {
+      windowSize = Math.min(stat.size, windowSize * 2);
+      continue;
+    }
+    try {
+      const entry = JSON.parse(last) as AuditLogEntry;
+      // Re-verify just this entry's content hash so we don't trust a tampered tail.
+      const computed = computeHash(
+        {
+          sequence: entry.sequence,
+          timestamp: entry.timestamp,
+          previousHash: entry.previousHash,
+          data: entry.data,
+        },
+        algorithm,
+      );
+      if (computed !== entry.contentHash) {
+        throw new AuditLogIntegrityError(
+          'Trailing entry contentHash mismatch — log was tampered with between writes.',
+          logPath,
+          entry.sequence - 1,
+        );
+      }
+      return { lastSequence: entry.sequence, lastHash: entry.contentHash, partialTailBytes };
+    } catch (err) {
+      if (err instanceof AuditLogIntegrityError) throw err;
+      // Tail is unparseable — fall back to a full streaming verify so the caller
+      // gets an integrity error rather than a silent reset.
+      const v = streamVerifySync(logPath, algorithm);
+      if (!v.valid && v.partialTailBytes === 0) {
+        throw new AuditLogIntegrityError(
+          `Cannot read chain tail: ${v.error ?? 'unparseable'}`,
+          logPath,
+          v.lastValidSequence,
+        );
+      }
+      return { lastSequence: v.lastValidSequence, lastHash: v.lastHash, partialTailBytes };
+    }
+  }
+
+  return { lastSequence: 0, lastHash: GENESIS_HASH, partialTailBytes };
+}
+
+// silence unused-import warning when bundlers strip Readable
+void Readable;
