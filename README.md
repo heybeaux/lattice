@@ -107,15 +107,166 @@ try {
 }
 ```
 
+## v0.4.0 — Hardening & Observability
+
+> All v0.4 features are opt-in. All v0.3 code works unchanged.
+
+### Persistent Circuit State
+
+Keep circuit breaker state across process restarts using `JsonFileBackend`:
+
+```typescript
+import { CircuitBreaker } from '@heybeaux/lattice-core';
+import { JsonFileBackend } from '@heybeaux/lattice-core/dist/breaker/persistence.js';
+
+const backend = new JsonFileBackend('./circuit-state.json');
+const breaker = new CircuitBreaker({
+  id: 'my-breaker',
+  failureThreshold: 3,
+  persistence: backend,
+});
+
+// Restore state from disk on startup
+await breaker.restoreState();
+```
+
+State survives restarts — if the circuit was open when the process exited, it will still be open when it comes back. The backend uses atomic writes (temp → rename) to prevent corruption.
+
+See [examples/persistent-breaker.ts](./examples/persistent-breaker.ts) and [docs/config.md](./docs/config.md).
+
+### L2 Embedding
+
+Add semantic consistency checks to `TieredCircuitBreaker` using OpenAI embeddings:
+
+```typescript
+import { TieredCircuitBreaker } from '@heybeaux/lattice-core';
+import { createOpenAIEmbeddingProvider } from '@heybeaux/lattice-provider-openai';
+
+const breaker = new TieredCircuitBreaker({ tier: 'L1+L2' });
+breaker.setEmbeddingProvider(
+  createOpenAIEmbeddingProvider({ apiKey: process.env.OPENAI_API_KEY })
+);
+
+const result = await breaker.validate(contract);
+// L1: schema check (<1ms) → L2: cosine similarity (50-200ms, batched)
+```
+
+The embedding provider includes an LRU cache (1024 entries) and token-bucket rate limiter (60 req/min) to avoid hammering the API.
+
+See [examples/l2-embedding.ts](./examples/l2-embedding.ts).
+
+### Structured Observability
+
+Export all Lattice events as newline-delimited JSON or OpenTelemetry spans:
+
+```typescript
+import { JsonLineExporter, OtelExporter, globalEmitter } from '@heybeaux/lattice-core';
+
+// JSON-line log (always available, no extra deps)
+const jsonExporter = new JsonLineExporter({ outputPath: './lattice-events.jsonl' });
+jsonExporter.attach(globalEmitter);
+
+// OpenTelemetry via OTLP/HTTP (peer deps: @opentelemetry/*)
+const otelExporter = new OtelExporter({
+  endpoint: 'http://localhost:4318/v1/traces',
+  serviceName: 'my-agent-system',
+});
+otelExporter.attach(globalEmitter);
+```
+
+OTel SDK is an optional peer dependency. If not installed, `OtelExporter` tracks spans internally without OTLP export — zero errors, graceful degradation.
+
+See [examples/observability.ts](./examples/observability.ts) and [docs/observability.md](./docs/observability.md).
+
+### Config File
+
+Place `lattice.config.json` in your project root for zero-code configuration:
+
+```json
+{
+  "circuitBreaker": {
+    "tier": "L1+L2",
+    "failureThreshold": 5,
+    "persist": { "path": "./circuit-state.json" }
+  },
+  "observability": {
+    "jsonLinePath": "./logs/lattice.jsonl"
+  }
+}
+```
+
+Lattice auto-discovers `lattice.config.json`, `.yaml`, `.toml`, `.mjs`, or `.cjs` from your working directory.
+
+```typescript
+import { createConfig } from '@heybeaux/lattice-core';
+
+// Auto-discovers lattice.config.json from cwd
+const config = createConfig();
+
+// Or async for YAML/TOML/ESM formats
+const config = await createConfigAsync();
+```
+
+See [docs/config.md](./docs/config.md) for the full schema reference.
+
+### Error Boundaries
+
+Typed errors for provider failures, with timeout and rate-limit wrappers:
+
+```typescript
+import {
+  withTimeout,
+  withRateLimit,
+  ProviderTimeoutError,
+  ProviderRateLimitError,
+} from '@heybeaux/lattice-core';
+
+// Timeout after 5s
+const result = await withTimeout(() => provider.embed(text), 5000, 'openai');
+
+// Auto-retry on 429 with exponential backoff
+const result = await withRateLimit(() => provider.embed(text), 'openai');
+
+// Catch specific errors
+try {
+  await breaker.validate(contract);
+} catch (err) {
+  if (err instanceof ProviderTimeoutError) {
+    console.error(`${err.provider} timed out after ${err.timeoutMs}ms`);
+  } else if (err instanceof ProviderRateLimitError) {
+    console.error(`Rate limited. Retry after ${err.retryAfterMs}ms`);
+  }
+}
+```
+
+Use `onReject: 'degrade'` in `TieredCircuitBreaker` to treat provider errors as graceful degradation rather than failures:
+
+```typescript
+const breaker = new TieredCircuitBreaker({
+  tier: 'L1+L2',
+  onReject: 'degrade',  // L2 timeout → pass through (flagged), not failure
+});
+```
+
+See [examples/error-boundaries.ts](./examples/error-boundaries.ts) and [docs/error-boundaries.md](./docs/error-boundaries.md).
+
 ## Examples
 
 - [**Quick Start Demo**](./examples/quick-start/demo.ts) — 4 scenarios: healthy pipeline, circuit breaker, redaction, degrade mode
+- [**Persistent Circuit Breaker**](./examples/persistent-breaker.ts) — `JsonFileBackend` across restarts
+- [**L2 Embedding**](./examples/l2-embedding.ts) — `TieredCircuitBreaker` with OpenAI embeddings
+- [**Observability**](./examples/observability.ts) — `JsonLineExporter` + `OtelExporter` setup
+- [**Error Boundaries**](./examples/error-boundaries.ts) — `withTimeout`, degrade mode
 - [**Real Benchmark**](./benchmark/run-real.ts) — 13 fault scenarios with actual OpenAI API calls
 - [**Forge Integration Plan**](./FORGE_INTEGRATION.md) — How to wrap Forge's LinkedIn pipeline
 
 ## Documentation
 
 - [**THESIS.md**](./THESIS.md) — Research, architecture, and positioning
+- [**Config Reference**](./docs/config.md) — `lattice.config.json` schema, all formats
+- [**Observability**](./docs/observability.md) — `JsonLineExporter`, `OtelExporter`, span reference
+- [**Error Boundaries**](./docs/error-boundaries.md) — Provider errors and graceful degradation
+- [**Migration v0.3 → v0.4**](./docs/migration-v0.3-to-v0.4.md) — Zero breaking changes, opt-in features
 - [**OpenSpec Proposal**](./openspec/changes/v0-1-state-contracts-and-circuit-breakers/proposal.md) — v0.1 scope and requirements
 - [**Marketing Site**](https://heybeaux.github.io/lattice/)
 
