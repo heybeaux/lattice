@@ -150,6 +150,9 @@ export type {
 // Canonical JSON serialization (shared utility for hashing / determinism)
 export { canonicalize, CanonicalMemo } from './util/canonical.js';
 
+// Vector similarity (spec 2.1.2–2.1.3) — default cosine similarity for L2 embedding providers.
+export { cosineSimilarity } from './util/similarity.js';
+
 // Token-bucket rate limiter (issue #19) — used by providers to throttle
 // outbound calls (e.g., embedding APIs) without taking a network dependency.
 export { TokenBucket } from './util/rate-limit.js';

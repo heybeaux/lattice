@@ -19,6 +19,9 @@
 import { OpenAI } from 'openai';
 import {
   TokenBucket,
+  withTimeout,
+  ProviderTimeoutError,
+  cosineSimilarity,
   type EmbeddingProvider,
   type JudgeProvider,
   type JudgeResult,
@@ -58,6 +61,12 @@ export interface OpenAIEmbeddingConfig {
         /** Refill window in ms (default 60_000 = 1 minute). */
         intervalMs?: number;
       };
+  /**
+   * Timeout for each embedding API call in milliseconds (default: 10000).
+   * If the OpenAI request does not complete within this window, the call
+   * rejects with {@link ProviderTimeoutError}. Set to 0 to disable.
+   */
+  timeoutMs?: number;
   /**
    * Inject a pre-built OpenAI client. Used by tests to attach mocks; in
    * production callers can leave this unset and let us construct the
@@ -141,6 +150,7 @@ export function createOpenAIEmbeddingProvider(
   const model = config?.model ?? 'text-embedding-3-small';
   const dimensions = config?.dimensions;
   const cache = new LRU<number[]>(config?.cacheSize ?? 1024);
+  const timeoutMs = config?.timeoutMs ?? 10_000;
 
   // Cache key includes the model + dimensions so an instance reconfigured to
   // a different model never returns a stale-shape vector. (Different
@@ -160,18 +170,27 @@ export function createOpenAIEmbeddingProvider(
    * Helper: actually call OpenAI for a list of inputs the cache could not
    * serve. One HTTP request regardless of `inputs.length`. Returns vectors
    * in the same order as `inputs`.
+   *
+   * Wrapped with `withTimeout` (spec 2.2.3): if the request does not
+   * complete within `timeoutMs` milliseconds, rejects with
+   * {@link ProviderTimeoutError}.
    */
   const callOpenAI = async (inputs: string[]): Promise<number[][]> => {
     if (limiter) await limiter.acquire(1);
-    const response = await client.embeddings.create({
-      model,
-      input: inputs.length === 1 ? inputs[0] : inputs,
-      ...(dimensions ? { dimensions } : {}),
-    });
-    // OpenAI guarantees `data` is returned in the same order as the input
-    // array. We map index→embedding here so the caller can splice cache
-    // hits back in by position.
-    return response.data.map((d) => d.embedding);
+    const run = async (): Promise<number[][]> => {
+      const response = await client.embeddings.create({
+        model,
+        input: inputs.length === 1 ? inputs[0] : inputs,
+        ...(dimensions ? { dimensions } : {}),
+      });
+      // OpenAI guarantees `data` is returned in the same order as the input
+      // array. We map index→embedding here so the caller can splice cache
+      // hits back in by position.
+      return response.data.map((d) => d.embedding);
+    };
+    return timeoutMs > 0
+      ? withTimeout(run, timeoutMs, 'openai')
+      : run();
   };
 
   return {
@@ -466,32 +485,10 @@ export function buildJudgeUserPrompt(
 export { validateJudgeResponse };
 
 /**
- * Compute cosine similarity between two vectors.
- * Exported for testing.
+ * Re-export `cosineSimilarity` from `@heybeaux/lattice-core` for backward
+ * compatibility. Consumers that previously imported it from this package
+ * (provider-openai) will continue to work without any change.
+ *
+ * The canonical implementation now lives in core (spec 2.1.2–2.1.3).
  */
-export function cosineSimilarity(a: number[], b: number[]): number {
-  if (a.length !== b.length) {
-    throw new Error(
-      `Vector dimension mismatch: got ${a.length} and ${b.length}`,
-    );
-  }
-
-  let dotProduct = 0;
-  let magA = 0;
-  let magB = 0;
-
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    magA += a[i] * a[i];
-    magB += b[i] * b[i];
-  }
-
-  magA = Math.sqrt(magA);
-  magB = Math.sqrt(magB);
-
-  if (magA === 0 || magB === 0) {
-    return 0;
-  }
-
-  return dotProduct / (magA * magB);
-}
+export { cosineSimilarity } from '@heybeaux/lattice-core';

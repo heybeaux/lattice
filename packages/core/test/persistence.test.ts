@@ -145,6 +145,158 @@ describe('JsonFileBackend', () => {
   });
 });
 
+describe('JsonFileBackend — additional spec coverage', () => {
+  beforeEach(() => {
+    if (!fs.existsSync(TEST_DIR)) {
+      fs.mkdirSync(TEST_DIR, { recursive: true });
+    }
+    if (fs.existsSync(STATE_FILE)) {
+      fs.unlinkSync(STATE_FILE);
+    }
+  });
+
+  afterEach(() => {
+    if (fs.existsSync(STATE_FILE)) {
+      fs.unlinkSync(STATE_FILE);
+    }
+    if (fs.existsSync(STATE_FILE + '.tmp')) {
+      fs.unlinkSync(STATE_FILE + '.tmp');
+    }
+    if (fs.existsSync(TEST_DIR)) {
+      fs.rmSync(TEST_DIR, { recursive: true, force: true });
+    }
+  });
+
+  // spec 1.2.5 — process-restart simulation
+  it('1.2.5: new backend instance reads state written by a previous instance (process restart)', async () => {
+    // Simulate "first process" — write state and flush.
+    const backend1 = new JsonFileBackend(STATE_FILE, 10);
+    const originalState = {
+      id: 'restart-breaker',
+      state: 'open' as const,
+      consecutiveFailures: 5,
+      openedAt: '2026-05-10T12:00:00.000Z',
+      recoveryTimeoutMs: 60000,
+      timesOpened: 2,
+      lastStateChange: '2026-05-10T12:00:00.000Z',
+    };
+    await backend1.setState('restart-breaker', originalState);
+    await backend1.flush();
+
+    // Simulate "second process" — create a brand-new backend pointing to the same file.
+    const backend2 = new JsonFileBackend(STATE_FILE);
+    const restored = await backend2.getState('restart-breaker');
+
+    expect(restored).not.toBeNull();
+    expect(restored?.state).toBe('open');
+    expect(restored?.consecutiveFailures).toBe(5);
+    expect(restored?.timesOpened).toBe(2);
+    expect(restored?.openedAt).toBe('2026-05-10T12:00:00.000Z');
+  });
+
+  // spec 1.4.2 — two breakers sharing one backend do not collide
+  it('1.4.2: two CircuitBreaker instances sharing the same backend store separate entries', async () => {
+    const backend = new JsonFileBackend(STATE_FILE, 10);
+
+    // Write two distinct states directly via the backend to verify separate key storage.
+    // (CircuitBreaker only persists on state transitions, so we use the backend API
+    // directly here to assert the multi-key storage contract without depending on
+    // internal breaker event sequencing.)
+    const stateA = {
+      id: 'breaker-a',
+      state: 'open' as const,
+      consecutiveFailures: 3,
+      openedAt: new Date().toISOString(),
+      recoveryTimeoutMs: 60000,
+      timesOpened: 1,
+      lastStateChange: new Date().toISOString(),
+    };
+    const stateB = {
+      id: 'breaker-b',
+      state: 'closed' as const,
+      consecutiveFailures: 0,
+      openedAt: null,
+      recoveryTimeoutMs: 60000,
+      timesOpened: 0,
+      lastStateChange: new Date().toISOString(),
+    };
+
+    await backend.setState('breaker-a', stateA);
+    await backend.setState('breaker-b', stateB);
+    await backend.flush();
+
+    // Each breaker must read back its OWN state without cross-contamination.
+    const readA = await backend.getState('breaker-a');
+    const readB = await backend.getState('breaker-b');
+
+    expect(readA?.state).toBe('open');
+    expect(readA?.consecutiveFailures).toBe(3);
+    expect(readA?.timesOpened).toBe(1);
+
+    expect(readB?.state).toBe('closed');
+    expect(readB?.consecutiveFailures).toBe(0);
+
+    // The file must hold exactly two separate entries.
+    const content = fs.readFileSync(STATE_FILE, 'utf-8');
+    const entries: [string, { state: string }][] = JSON.parse(content);
+    const entryMap = new Map(entries);
+
+    expect(entryMap.get('breaker-a')?.state).toBe('open');
+    expect(entryMap.get('breaker-b')?.state).toBe('closed');
+    expect(entryMap.size).toBe(2);
+
+    // Now create two fresh breakers pointing at the same file; they must not
+    // overwrite each other's state.
+    const breakerA = new CircuitBreaker({ id: 'breaker-a', persistence: backend, failureThreshold: 2 });
+    const breakerB = new CircuitBreaker({ id: 'breaker-b', persistence: backend, failureThreshold: 2 });
+
+    await breakerA.restoreState();
+    await breakerB.restoreState();
+
+    expect(breakerA.state).toBe('open');
+    expect(breakerB.state).toBe('closed');
+  });
+
+  // spec 1.4.3 — concurrent writes from two breakers are both persisted
+  it('1.4.3: concurrent setState calls from two breakers both survive after flush', async () => {
+    const backend = new JsonFileBackend(STATE_FILE, 10);
+
+    const makeState = (id: string, state: 'open' | 'closed'): Parameters<typeof backend.setState>[1] => ({
+      id,
+      state,
+      consecutiveFailures: state === 'open' ? 3 : 0,
+      openedAt: state === 'open' ? new Date().toISOString() : null,
+      recoveryTimeoutMs: 60000,
+      timesOpened: state === 'open' ? 1 : 0,
+      lastStateChange: new Date().toISOString(),
+    });
+
+    // Fire both writes simultaneously — no await between them.
+    await Promise.all([
+      backend.setState('concurrent-a', makeState('concurrent-a', 'open')),
+      backend.setState('concurrent-b', makeState('concurrent-b', 'closed')),
+    ]);
+
+    await backend.flush();
+
+    const stateA = await backend.getState('concurrent-a');
+    const stateB = await backend.getState('concurrent-b');
+
+    expect(stateA).not.toBeNull();
+    expect(stateA?.state).toBe('open');
+    expect(stateA?.consecutiveFailures).toBe(3);
+
+    expect(stateB).not.toBeNull();
+    expect(stateB?.state).toBe('closed');
+    expect(stateB?.consecutiveFailures).toBe(0);
+
+    // Verify both are persisted on disk as well.
+    const content = fs.readFileSync(STATE_FILE, 'utf-8');
+    const entries: [string, { state: string }][] = JSON.parse(content);
+    expect(entries).toHaveLength(2);
+  });
+});
+
 describe('CircuitBreaker with persistence', () => {
   beforeEach(() => {
     if (!fs.existsSync(TEST_DIR)) {
