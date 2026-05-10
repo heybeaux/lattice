@@ -96,6 +96,15 @@ export interface ValidationResult {
   reason?: string;
   /** Confidence score (L2 similarity or L3 judge confidence) */
   confidence?: number;
+  /**
+   * Set to `true` when the result was synthesised by the graceful-degradation
+   * path (i.e. a provider threw a known provider error and `onReject` is
+   * `'degrade'`). Callers can inspect this flag to decide whether to apply
+   * extra caution despite `passed === true`.
+   */
+  providerFailure?: boolean;
+  /** Optional metadata bag for attaching extra context to the result. */
+  metadata?: Record<string, unknown>;
 }
 
 /**
