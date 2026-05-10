@@ -84,6 +84,10 @@ export type {
 export { EventEmitter, globalEmitter } from './events/emitter.js';
 export type { LatticeEvent, LatticeEventType, LatticeEventHandler } from './events/emitter.js';
 
+// Observability
+export { JsonLineExporter } from './observability/json-line.js';
+export type { JsonLineEntry, JsonLineExporterConfig } from './observability/json-line.js';
+
 // Config
 export { createConfig, createConfigAsync, defaultConfig, discoverConfig, validateConfig, mergeConfigs, loadConfigFile } from './config/loader.js';
 export { ConfigValidationError } from './config/loader.js';
