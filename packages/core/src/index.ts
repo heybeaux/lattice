@@ -88,6 +88,9 @@ export type { LatticeEvent, LatticeEventType, LatticeEventHandler } from './even
 export { JsonLineExporter } from './observability/json-line.js';
 export type { JsonLineEntry, JsonLineExporterConfig } from './observability/json-line.js';
 
+export { OtelExporter } from './observability/otel.js';
+export type { OtelSpan, OtelExporterConfig } from './observability/otel.js';
+
 // Config
 export { createConfig, createConfigAsync, defaultConfig, discoverConfig, validateConfig, mergeConfigs, loadConfigFile } from './config/loader.js';
 export { ConfigValidationError } from './config/loader.js';
@@ -147,7 +150,20 @@ export type {
 // Canonical JSON serialization (shared utility for hashing / determinism)
 export { canonicalize, CanonicalMemo } from './util/canonical.js';
 
+// Vector similarity (spec 2.1.2–2.1.3) — default cosine similarity for L2 embedding providers.
+export { cosineSimilarity } from './util/similarity.js';
+
 // Token-bucket rate limiter (issue #19) — used by providers to throttle
 // outbound calls (e.g., embedding APIs) without taking a network dependency.
 export { TokenBucket } from './util/rate-limit.js';
 export type { TokenBucketOptions } from './util/rate-limit.js';
+
+// Error boundaries (Section 5) — provider error classes and utility wrappers.
+export {
+  ProviderTimeoutError,
+  ProviderRateLimitError,
+  MalformedProviderResponseError,
+  withTimeout,
+  withRateLimit,
+  isProviderError,
+} from './errors/provider.js';

@@ -6,6 +6,7 @@ import {
   validateJudgeResponse,
   buildJudgeUserPrompt,
 } from '../src/index.js';
+import { ProviderTimeoutError } from '@heybeaux/lattice-core';
 
 // ─── Cosine Similarity ───
 
@@ -101,6 +102,92 @@ describe('createOpenAIJudgeProvider', () => {
     expect(mockResult.verdict).toBe('pass');
     expect(mockResult.confidence).toBeGreaterThan(0.5);
     expect(typeof mockResult.reasoning).toBe('string');
+  });
+});
+
+// ─── Timeout support (spec 2.2.3) ───
+
+describe('createOpenAIEmbeddingProvider — timeoutMs', () => {
+  it('throws ProviderTimeoutError when API call exceeds timeoutMs', async () => {
+    // Slow mock: never resolves within the timeout window.
+    const slowClient = {
+      embeddings: {
+        create: () =>
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('should not fire')), 500),
+          ),
+      },
+    };
+
+    const provider = createOpenAIEmbeddingProvider({
+      client: slowClient as any,
+      timeoutMs: 50, // 50ms timeout, mock takes 500ms
+      rateLimit: false,
+    });
+
+    await expect(provider.embed('hello')).rejects.toThrow(ProviderTimeoutError);
+  });
+
+  it('includes provider name "openai" in the ProviderTimeoutError', async () => {
+    const slowClient = {
+      embeddings: {
+        create: () => new Promise<never>(() => { /* never resolves */ }),
+      },
+    };
+
+    const provider = createOpenAIEmbeddingProvider({
+      client: slowClient as any,
+      timeoutMs: 30,
+      rateLimit: false,
+    });
+
+    try {
+      await provider.embed('test');
+      expect.fail('Should have thrown');
+    } catch (err) {
+      expect(err).toBeInstanceOf(ProviderTimeoutError);
+      expect((err as ProviderTimeoutError).provider).toBe('openai');
+      expect((err as ProviderTimeoutError).timeoutMs).toBe(30);
+    }
+  });
+
+  it('succeeds when API call completes before timeoutMs', async () => {
+    const fastClient = {
+      embeddings: {
+        create: async () => ({
+          data: [{ embedding: [1, 0, 0] }],
+        }),
+      },
+    };
+
+    const provider = createOpenAIEmbeddingProvider({
+      client: fastClient as any,
+      timeoutMs: 5000, // plenty of time
+      rateLimit: false,
+    });
+
+    const vec = await provider.embed('hello');
+    expect(vec).toEqual([1, 0, 0]);
+  });
+
+  it('disables timeout when timeoutMs is 0', async () => {
+    // A fast mock — with timeoutMs=0 no timer is installed, should work fine.
+    const fastClient = {
+      embeddings: {
+        create: async () => ({
+          data: [{ embedding: [0, 1, 0] }],
+        }),
+      },
+    };
+
+    const provider = createOpenAIEmbeddingProvider({
+      client: fastClient as any,
+      timeoutMs: 0,
+      rateLimit: false,
+    });
+
+    const vec = await provider.embed('hello');
+    expect(vec).toEqual([0, 1, 0]);
   });
 });
 

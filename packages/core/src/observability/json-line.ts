@@ -64,12 +64,7 @@ export class JsonLineExporter {
   constructor(config: JsonLineExporterConfig) {
     this.outputPath = config.outputPath;
     this.version = config.version ?? '0.4.0';
-
-    // Ensure directory exists
-    const dir = path.dirname(this.outputPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
+    // Directory is created lazily on first write
   }
 
   /**
@@ -114,6 +109,12 @@ export class JsonLineExporter {
    * Write a single entry to the log file.
    */
   private writeEntry(event: LatticeEvent): void {
+    // Ensure directory exists on first write
+    const dir = path.dirname(this.outputPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+
     const entry: JsonLineEntry = {
       timestamp: event.timestamp,
       event_type: event.type,

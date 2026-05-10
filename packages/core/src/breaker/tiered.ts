@@ -3,6 +3,7 @@ import { StateContract } from '../contract/types.js';
 import { CircuitBreaker } from './breaker.js';
 import { canonicalize, CanonicalMemo } from '../util/canonical.js';
 import { redactContract, type SensitivityLevel } from '../events/redact.js';
+import { isProviderError } from '../errors/provider.js';
 import {
   TieredCircuitBreakerConfig,
   ValidationResult,
@@ -295,7 +296,6 @@ export class TieredCircuitBreaker {
 
     // Build canon lazily only when entering L2/L3 logic (when tier !== 'L1').
     let canon: PayloadCanon | undefined;
-    const needsCanon = enabledTiers.some((t) => t === 'L2' || t === 'L3');
 
     for (const tier of enabledTiers) {
       if ((tier === 'L2' || tier === 'L3') && !canon) {
@@ -432,6 +432,18 @@ export class TieredCircuitBreaker {
         confidence: similarity,
       };
     } catch (error) {
+      // Graceful degradation: when onReject === 'degrade' and the error is a
+      // known provider error, return a passing result flagged with
+      // providerFailure: true instead of crashing the validation pipeline.
+      if (this.config.onReject === 'degrade' && isProviderError(error)) {
+        return {
+          passed: true,
+          tier: 'L2',
+          durationMs: Date.now() - start,
+          providerFailure: true,
+          metadata: { providerFailure: true },
+        };
+      }
       return {
         passed: false,
         tier: 'L2',
@@ -514,6 +526,16 @@ export class TieredCircuitBreaker {
         confidence: judgeResult.confidence,
       };
     } catch (error) {
+      // Graceful degradation: mirror the L2 behaviour for known provider errors.
+      if (this.config.onReject === 'degrade' && isProviderError(error)) {
+        return {
+          passed: true,
+          tier: 'L3',
+          durationMs: Date.now() - start,
+          providerFailure: true,
+          metadata: { providerFailure: true },
+        };
+      }
       return {
         passed: false,
         tier: 'L3',
