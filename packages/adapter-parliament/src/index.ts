@@ -20,7 +20,10 @@ import type {
   TieredCircuitBreakerConfig,
   ConsensusReducerConfig,
   StateContract,
+  EmbeddingProvider,
 } from '@heybeaux/lattice-core';
+
+export type { EmbeddingProvider };
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -60,6 +63,8 @@ export interface ParliamentConfig {
   modelConfigs?: Record<string, ParliamentModelConfig>;
   /** Default model configuration (applied to all models without specific config) */
   defaultModelConfig?: ParliamentModelConfig;
+  /** Embedding provider for semantic consensus comparison */
+  embeddingProvider?: EmbeddingProvider;
 }
 
 /**
@@ -176,26 +181,32 @@ export class ParliamentCircuitBreaker {
  *
  * Detects disagreements between model responses, computes agreement
  * ratios, and flags conflicts for the synthesizer to resolve.
+ *
+ * When an embeddingProvider is supplied, the consensus fields
+ * (mainPoint, supportingArguments, conclusion) are compared using
+ * cosine similarity (≥0.85 = agreeing) instead of exact string equality.
  */
 export class ParliamentReducer {
   private reducer: ConsensusReducer;
 
-  constructor(config?: ConsensusReducerConfig) {
+  constructor(config?: ConsensusReducerConfig, embeddingProvider?: EmbeddingProvider) {
     this.reducer = new ConsensusReducer({
       conflictStrategy: config?.conflictStrategy ?? 'flag-only',
       minAgreementRatio: config?.minAgreementRatio ?? 0.6,
       consensusFields: config?.consensusFields ?? ['mainPoint', 'supportingArguments', 'conclusion'],
       includeIndividualOutputs: config?.includeIndividualOutputs ?? true,
+      embeddingProvider: embeddingProvider ?? config?.embeddingProvider,
+      embeddingThreshold: config?.embeddingThreshold ?? 0.85,
     });
   }
 
   /**
    * Reduce multiple model responses into a consensus.
    */
-  reduce(
+  async reduce(
     contracts: StateContract[],
     traceId?: string,
-  ): {
+  ): Promise<{
     consensus: unknown;
     conflicts: Array<{
       field: string;
@@ -205,8 +216,8 @@ export class ParliamentReducer {
     agreementRatio: number;
     consensusReached: boolean;
     reducedContract: StateContract;
-  } {
-    const result = this.reducer.reduce(contracts);
+  }> {
+    const result = await this.reducer.reduce(contracts);
     const reducedContract = this.reducer.createReducedContract(result, contracts, 'parliament-reducer', null);
 
     return {
@@ -281,8 +292,8 @@ export async function runParliamentDeliberation(
   }
 
   // Run consensus reduction
-  const reducer = new ParliamentReducer(config?.reducer);
-  const reduction = reducer.reduce(modelContracts, traceId);
+  const reducer = new ParliamentReducer(config?.reducer, config?.embeddingProvider);
+  const reduction = await reducer.reduce(modelContracts, traceId);
 
   // Log consensus to audit
   if (auditLog) {

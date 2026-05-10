@@ -1,6 +1,7 @@
 import { StateContract } from '../contract/types.js';
 import { createContract } from '../contract/factory.js';
 import { canonicalize } from '../util/canonical.js';
+import type { EmbeddingProvider } from '../breaker/types.js';
 
 /**
  * Conflict resolution strategy for the ConsensusReducer.
@@ -19,6 +20,12 @@ export interface ConsensusReducerConfig {
   minAgreementRatio?: number;
   /** Whether to include all individual outputs in the reduced contract metadata */
   includeIndividualOutputs?: boolean;
+  /** Embedding provider for semantic field comparison */
+  embeddingProvider?: EmbeddingProvider;
+  /** Fields to compare using embedding similarity (default: all consensusFields when provider is set) */
+  embeddingFields?: string[];
+  /** Cosine similarity threshold for "agreeing" (default: 0.85) */
+  embeddingThreshold?: number;
 }
 
 /**
@@ -77,7 +84,9 @@ export interface Conflict {
  * ```
  */
 export class ConsensusReducer<TOut = unknown> {
-  private readonly config: Required<ConsensusReducerConfig>;
+  private readonly config: Required<Omit<ConsensusReducerConfig, 'embeddingProvider'>> & {
+    embeddingProvider?: EmbeddingProvider;
+  };
 
   constructor(config?: ConsensusReducerConfig) {
     this.config = {
@@ -85,20 +94,28 @@ export class ConsensusReducer<TOut = unknown> {
       consensusFields: config?.consensusFields ?? [],
       minAgreementRatio: config?.minAgreementRatio ?? 0.6,
       includeIndividualOutputs: config?.includeIndividualOutputs ?? false,
+      embeddingProvider: config?.embeddingProvider,
+      embeddingFields: config?.embeddingFields ?? [],
+      embeddingThreshold: config?.embeddingThreshold ?? 0.85,
     };
   }
 
   /**
    * Reduce multiple State Contracts into a single consensus output.
    *
+   * When an embeddingProvider is configured, string fields in embeddingFields
+   * (or all consensusFields if embeddingFields is empty) are compared using
+   * cosine similarity instead of exact string equality. Similarity ≥ threshold
+   * (default 0.85) counts as agreeing.
+   *
    * @param contracts - State Contracts from parallel agents
    * @param traceId - Shared trace ID for the reduced contract
    * @returns ReduceResult with consensus output and any conflicts
    */
-  reduce(
+  async reduce(
     contracts: StateContract<unknown, TOut>[],
     traceId?: string,
-  ): ReduceResult<TOut> {
+  ): Promise<ReduceResult<TOut>> {
     if (contracts.length === 0) {
       throw new Error('ConsensusReducer requires at least one contract');
     }
@@ -117,6 +134,12 @@ export class ConsensusReducer<TOut = unknown> {
       ? this.config.consensusFields
       : this.getCommonFields(outputs);
 
+    const embeddingFields = new Set(
+      this.config.embeddingFields.length > 0
+        ? this.config.embeddingFields
+        : (this.config.embeddingProvider ? fields : []),
+    );
+
     const conflicts: Conflict[] = [];
     const consensus: Record<string, unknown> = {};
     let totalAgreements = 0;
@@ -128,7 +151,14 @@ export class ConsensusReducer<TOut = unknown> {
         value: (o as any)?.[field],
       }));
 
-      const fieldResult = this.resolveField(field, values, contracts);
+      let fieldResult: { value: unknown; resolved: boolean; method: string; agreementRatio: number };
+
+      if (this.config.embeddingProvider && embeddingFields.has(field) && values.every(v => typeof v.value === 'string')) {
+        fieldResult = await this.resolveFieldWithEmbeddings(field, values as Array<{ agentId: string; value: string }>);
+      } else {
+        fieldResult = this.resolveField(field, values, contracts);
+      }
+
       consensus[field] = fieldResult.value;
 
       if (!fieldResult.resolved) {
@@ -330,6 +360,55 @@ export class ConsensusReducer<TOut = unknown> {
           agreementRatio,
         };
     }
+  }
+
+  /**
+   * Resolve a field using embedding cosine similarity.
+   * Groups values where pairwise similarity ≥ threshold into agreement clusters.
+   * The largest cluster wins; agreement ratio = cluster size / total agents.
+   */
+  private async resolveFieldWithEmbeddings(
+    field: string,
+    values: Array<{ agentId: string; value: string }>,
+  ): Promise<{ value: unknown; resolved: boolean; method: string; agreementRatio: number }> {
+    const provider = this.config.embeddingProvider!;
+    const threshold = this.config.embeddingThreshold;
+
+    const texts = values.map(v => v.value);
+    const embeddings = await (provider.embedBatch
+      ? provider.embedBatch(texts)
+      : Promise.all(texts.map(t => provider.embed(t))));
+
+    // Union-find: group agents that agree with each other (pairwise similarity ≥ threshold)
+    const parent = values.map((_, i) => i);
+    const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+    const union = (a: number, b: number) => { parent[find(a)] = find(b); };
+
+    for (let i = 0; i < values.length; i++) {
+      for (let j = i + 1; j < values.length; j++) {
+        const sim = provider.similarity(embeddings[i], embeddings[j]);
+        if (sim >= threshold) union(i, j);
+      }
+    }
+
+    // Find the largest agreement cluster
+    const clusters = new Map<number, number[]>();
+    for (let i = 0; i < values.length; i++) {
+      const root = find(i);
+      if (!clusters.has(root)) clusters.set(root, []);
+      clusters.get(root)!.push(i);
+    }
+
+    const largest = Array.from(clusters.values()).sort((a, b) => b.length - a.length)[0];
+    const agreementRatio = largest.length / values.length;
+    const resolved = agreementRatio >= this.config.minAgreementRatio;
+
+    return {
+      value: values[largest[0]].value,
+      resolved,
+      method: `embedding-similarity (threshold=${threshold}, ${largest.length}/${values.length} agents agree)`,
+      agreementRatio,
+    };
   }
 
   /**

@@ -252,37 +252,37 @@ describe('ConsensusReducer', () => {
       budget: { tokensUsed: 100, callsMade: 1, wallClockMs: 50 },
     });
 
-  it('returns single output when only one contract', () => {
+  it('returns single output when only one contract', async () => {
     const reducer = new ConsensusReducer();
     const contract = makeContract('agent-1', { summary: 'hello', score: 90 });
 
-    const result = reducer.reduce([contract as any]);
+    const result = await reducer.reduce([contract as any]);
     expect(result.output).toEqual({ summary: 'hello', score: 90 });
     expect(result.consensus).toBe(true);
     expect(result.agreementRatio).toBe(1.0);
     expect(result.conflicts).toEqual([]);
   });
 
-  it('detects unanimous agreement', () => {
+  it('detects unanimous agreement', async () => {
     const reducer = new ConsensusReducer();
     const c1 = makeContract('agent-1', { summary: 'hello', score: 90 });
     const c2 = makeContract('agent-2', { summary: 'hello', score: 90 });
     const c3 = makeContract('agent-3', { summary: 'hello', score: 90 });
 
-    const result = reducer.reduce([c1, c2, c3] as any);
+    const result = await reducer.reduce([c1, c2, c3] as any);
     expect(result.output).toEqual({ summary: 'hello', score: 90 });
     expect(result.consensus).toBe(true);
     expect(result.agreementRatio).toBe(1.0);
     expect(result.conflicts).toEqual([]);
   });
 
-  it('resolves conflicts via majority vote', () => {
+  it('resolves conflicts via majority vote', async () => {
     const reducer = new ConsensusReducer();
     const c1 = makeContract('agent-1', { summary: 'hello', score: 90 });
     const c2 = makeContract('agent-2', { summary: 'hello', score: 90 });
     const c3 = makeContract('agent-3', { summary: 'different', score: 50 });
 
-    const result = reducer.reduce([c1, c2, c3] as any);
+    const result = await reducer.reduce([c1, c2, c3] as any);
     expect(result.output.summary).toBe('hello');
     expect(result.output.score).toBe(90);
     expect(result.conflicts.length).toBe(0); // 2/3 is majority, above default 0.6
@@ -290,7 +290,7 @@ describe('ConsensusReducer', () => {
     expect(result.agreementRatio).toBe(1.0);
   });
 
-  it('detects unresolved conflicts when no majority', () => {
+  it('detects unresolved conflicts when no majority', async () => {
     const reducer = new ConsensusReducer({
       minAgreementRatio: 0.8,
     });
@@ -298,30 +298,30 @@ describe('ConsensusReducer', () => {
     const c2 = makeContract('agent-2', { summary: 'world' });
     const c3 = makeContract('agent-3', { summary: 'different' });
 
-    const result = reducer.reduce([c1, c2, c3] as any);
+    const result = await reducer.reduce([c1, c2, c3] as any);
     expect(result.conflicts.length).toBe(1);
     expect(result.conflicts[0].field).toBe('summary');
     expect(result.consensus).toBe(false);
   });
 
-  it('supports first-agent strategy', () => {
+  it('supports first-agent strategy', async () => {
     const reducer = new ConsensusReducer({
       conflictStrategy: 'first',
     });
     const c1 = makeContract('agent-1', { summary: 'hello' });
     const c2 = makeContract('agent-2', { summary: 'world' });
 
-    const result = reducer.reduce([c1, c2] as any);
+    const result = await reducer.reduce([c1, c2] as any);
     expect(result.output.summary).toBe('hello');
     expect(result.conflicts.length).toBe(1); // Not resolved (first strategy always flags)
   });
 
-  it('creates reduced contract with lineage', () => {
+  it('creates reduced contract with lineage', async () => {
     const reducer = new ConsensusReducer();
     const c1 = makeContract('agent-1', { summary: 'hello' });
     const c2 = makeContract('agent-2', { summary: 'hello' });
 
-    const reduceResult = reducer.reduce([c1, c2] as any);
+    const reduceResult = await reducer.reduce([c1, c2] as any);
     const reducedContract = reducer.createReducedContract(reduceResult, [c1, c2] as any);
 
     expect(reducedContract.fromAgent).toBe('consensus-reducer');
@@ -332,13 +332,13 @@ describe('ConsensusReducer', () => {
     expect(reducedContract.metadata.conflictCount).toBe(0);
   });
 
-  it('flags high-risk when no consensus', () => {
+  it('flags high-risk when no consensus', async () => {
     const reducer = new ConsensusReducer();
     const c1 = makeContract('agent-1', { summary: 'hello' });
     const c2 = makeContract('agent-2', { summary: 'world' });
     const c3 = makeContract('agent-3', { summary: 'different' });
 
-    const reduceResult = reducer.reduce([c1, c2, c3] as any);
+    const reduceResult = await reducer.reduce([c1, c2, c3] as any);
     const reducedContract = reducer.createReducedContract(reduceResult, [c1, c2, c3] as any);
 
     expect(reducedContract.metadata.isHighRisk).toBe(true);
@@ -346,38 +346,38 @@ describe('ConsensusReducer', () => {
     expect(reducedContract.assumptions[0].riskLevel).toBe('high');
   });
 
-  it('includes individual outputs when configured', () => {
+  it('includes individual outputs when configured', async () => {
     const reducer = new ConsensusReducer({
       includeIndividualOutputs: true,
     });
     const c1 = makeContract('agent-1', { summary: 'hello' });
     const c2 = makeContract('agent-2', { summary: 'world' });
 
-    const reduceResult = reducer.reduce([c1, c2] as any);
+    const reduceResult = await reducer.reduce([c1, c2] as any);
     const reducedContract = reducer.createReducedContract(reduceResult, [c1, c2] as any);
 
     expect(reducedContract.metadata.individualOutputs).toBeDefined();
     expect(reducedContract.metadata.individualOutputs).toHaveLength(2);
   });
 
-  it('handles mismatched field sets', () => {
+  it('handles mismatched field sets', async () => {
     const reducer = new ConsensusReducer();
     const c1 = makeContract('agent-1', { summary: 'hello', extra: 'field1' });
     const c2 = makeContract('agent-2', { summary: 'hello' }); // missing extra field
 
-    const result = reducer.reduce([c1, c2] as any);
+    const result = await reducer.reduce([c1, c2] as any);
     // Only common fields are reduced
     expect(result.output).toHaveProperty('summary');
   });
 
-  it('supports explicit field selection', () => {
+  it('supports explicit field selection', async () => {
     const reducer = new ConsensusReducer({
       consensusFields: ['summary'],
     });
     const c1 = makeContract('agent-1', { summary: 'hello', score: 90 });
     const c2 = makeContract('agent-2', { summary: 'hello', score: 50 });
 
-    const result = reducer.reduce([c1, c2] as any);
+    const result = await reducer.reduce([c1, c2] as any);
     expect(result.output).toHaveProperty('summary');
     // score is not in consensusFields, so it's not included
     expect(result.output).not.toHaveProperty('score');
