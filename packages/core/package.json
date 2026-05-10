@@ -43,6 +43,22 @@
     "ajv-formats": "^3.0.1",
     "ulidx": "^2.4.1"
   },
+  "peerDependencies": {
+    "@opentelemetry/api": "^1.x",
+    "@opentelemetry/sdk-node": "^0.x",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.x"
+  },
+  "peerDependenciesMeta": {
+    "@opentelemetry/api": {
+      "optional": true
+    },
+    "@opentelemetry/sdk-node": {
+      "optional": true
+    },
+    "@opentelemetry/exporter-trace-otlp-http": {
+      "optional": true
+    }
+  },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "eslint": "^9.27.0",

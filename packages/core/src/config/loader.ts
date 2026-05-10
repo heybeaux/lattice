@@ -41,6 +41,7 @@ export interface LatticeConfig {
     otlpExporter?: {
       endpoint: string;
       protocol?: 'http' | 'grpc';
+      serviceName?: string;
     };
   };
   audit?: {
