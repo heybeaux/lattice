@@ -88,6 +88,9 @@ export type { LatticeEvent, LatticeEventType, LatticeEventHandler } from './even
 export { JsonLineExporter } from './observability/json-line.js';
 export type { JsonLineEntry, JsonLineExporterConfig } from './observability/json-line.js';
 
+export { OtelExporter } from './observability/otel.js';
+export type { OtelSpan, OtelExporterConfig } from './observability/otel.js';
+
 // Config
 export { createConfig, createConfigAsync, defaultConfig, discoverConfig, validateConfig, mergeConfigs, loadConfigFile } from './config/loader.js';
 export { ConfigValidationError } from './config/loader.js';
