@@ -11,6 +11,10 @@ export interface CircuitBreakerConfig {
   failureThreshold?: number;
   /** Milliseconds to wait before transitioning from open to half-open */
   recoveryTimeoutMs?: number;
+  /** Persistence backend for state survival across restarts */
+  persistence?: import('./persistence.js').PersistenceBackend;
+  /** Unique identifier for this breaker (used for persistence) */
+  id?: string;
 }
 
 /**
@@ -63,10 +67,58 @@ export class CircuitBreaker {
 
   private readonly failureThreshold: number;
   private readonly recoveryTimeoutMs: number;
+  private readonly persistence?: import('./persistence.js').PersistenceBackend;
+  private readonly id: string;
 
   constructor(config?: CircuitBreakerConfig) {
     this.failureThreshold = config?.failureThreshold ?? 3;
     this.recoveryTimeoutMs = config?.recoveryTimeoutMs ?? 60_000;
+    this.persistence = config?.persistence;
+    this.id = config?.id ?? `breaker-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  /**
+   * Restore persisted state. Call after construction.
+   */
+  async restoreState(): Promise<void> {
+    if (!this.persistence) return;
+    const saved = await this.persistence.getState(this.id);
+    if (!saved) return;
+
+    this._state = saved.state;
+    this._consecutiveFailures = saved.consecutiveFailures;
+    this._metrics.consecutiveFailures = saved.consecutiveFailures;
+    this._metrics.state = saved.state;
+    this._metrics.timesOpened = saved.timesOpened;
+    this._metrics.lastStateChange = saved.lastStateChange;
+
+    if (saved.openedAt) {
+      this._openedAt = new Date(saved.openedAt).getTime();
+    }
+
+    // Check if recovery timeout has elapsed while we were down
+    if (this._state === 'open' && this._openedAt !== null) {
+      const elapsed = Date.now() - this._openedAt;
+      if (elapsed >= this.recoveryTimeoutMs) {
+        this.transitionTo('half-open');
+      }
+    }
+  }
+
+  /**
+   * Persist current state to the backend.
+   */
+  private async persistState(): Promise<void> {
+    if (!this.persistence) return;
+    await this.persistence.setState(this.id, {
+      id: this.id,
+      state: this._state,
+      consecutiveFailures: this._consecutiveFailures,
+      openedAt: this._openedAt !== null ? new Date(this._openedAt).toISOString() : null,
+      recoveryTimeoutMs: this.recoveryTimeoutMs,
+      timesOpened: this._metrics.timesOpened,
+      lastStateChange: this._metrics.lastStateChange,
+    });
   }
 
   /** Current state of the circuit breaker */
@@ -81,20 +133,14 @@ export class CircuitBreaker {
     return this._state;
   }
 
-  /** Current metrics snapshot */
+  /** Current circuit breaker metrics */
   get metrics(): Readonly<CircuitMetrics> {
     return { ...this._metrics, state: this.state };
   }
 
-  /**
-   * Check if the circuit allows a validation attempt.
-   *
-   * Returns true if the circuit is closed or half-open (allowing the test attempt).
-   * Returns false if the circuit is open (blocking immediately).
-   */
+  /** Whether the circuit allows validation attempts */
   canAttempt(): boolean {
-    const state = this.state; // triggers auto-transition check
-    return state === 'closed' || state === 'half-open';
+    return this.state !== 'open';
   }
 
   /**
@@ -111,6 +157,8 @@ export class CircuitBreaker {
     if (this._state === 'half-open') {
       this.transitionTo('closed');
     }
+
+    this.persistState();
   }
 
   /**
@@ -133,6 +181,8 @@ export class CircuitBreaker {
     if (this._consecutiveFailures >= this.failureThreshold) {
       this.transitionTo('open');
     }
+
+    this.persistState();
   }
 
   /**
@@ -160,5 +210,7 @@ export class CircuitBreaker {
     } else if (newState === 'closed') {
       this._openedAt = null;
     }
+
+    this.persistState();
   }
 }

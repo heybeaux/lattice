@@ -42,6 +42,13 @@ export type {
 } from './breaker/breaker.js';
 
 export type {
+  PersistenceBackend,
+  PersistedBreakerState,
+  JsonFileBackend,
+  MemoryBackend,
+} from './breaker/persistence.js';
+
+export type {
   ValidationTier,
   TieredCircuitBreakerConfig,
   ValidationResult as TieredValidationResult,
