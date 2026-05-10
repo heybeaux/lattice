@@ -18,6 +18,7 @@
 import {
   TieredCircuitBreaker,
   createContract,
+  ProviderTimeoutError,
   type EmbeddingProvider,
 } from '../packages/core/src/index.js';
 
@@ -123,10 +124,7 @@ console.log('--- Scenario 3: Degrade mode (provider failure → pass-through) --
 const timeoutSimProvider: EmbeddingProvider = {
   async embed(): Promise<number[]> {
     // Simulate a provider that always times out
-    await new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('Network timeout')), 10),
-    );
-    return [];
+    throw new ProviderTimeoutError('mock-embedder', 10);
   },
   similarity() {
     return 0;

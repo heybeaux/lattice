@@ -245,9 +245,11 @@ Run a local OTel collector + Jaeger UI in one command:
 
 ```bash
 docker run -d \
-  -p 16686:16686 \  # Jaeger UI
-  -p 4318:4318 \    # OTLP/HTTP
+  -p 16686:16686 \
+  -p 4318:4318 \
   jaegertracing/all-in-one:latest
+# Jaeger UI  → http://localhost:16686
+# OTLP/HTTP  → port 4318
 ```
 
 Then open `http://localhost:16686` and search for service `lattice`.
