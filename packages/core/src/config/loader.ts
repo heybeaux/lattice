@@ -9,6 +9,12 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { createRequire } from 'module';
+
+// ESM packages cannot use the global `require`. Create a CJS-compatible
+// require function so .cjs configs and optional peer deps (js-yaml, toml)
+// can be loaded with require() inside an ES module context.
+const require = createRequire(import.meta.url);
 
 const CONFIG_FILES = [
   'lattice.config.json',
@@ -41,6 +47,7 @@ export interface LatticeConfig {
     otlpExporter?: {
       endpoint: string;
       protocol?: 'http' | 'grpc';
+      serviceName?: string;
     };
   };
   audit?: {
@@ -245,8 +252,14 @@ export function createConfig(configOrPath?: string | LatticeConfig): LatticeConf
     configPath = discoverConfig();
   }
 
-  // Only support JSON synchronously
-  if (configPath && configPath.endsWith('.json')) {
+  // Only support JSON synchronously; all other formats require async loading.
+  if (configPath) {
+    if (!configPath.endsWith('.json')) {
+      throw new Error(
+        `createConfig() only supports JSON config files. ` +
+        `For "${path.extname(configPath) || 'unknown'}" format, use await createConfigAsync("${configPath}") instead.`,
+      );
+    }
     fileConfig = loadJsonFile(configPath) as LatticeConfig;
   }
 
