@@ -1,6 +1,6 @@
 {
   "name": "@heybeaux/lattice-adapter-parliament",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Lattice coordination layer for Parliament — wraps multi-model deliberations with State Contracts and Circuit Breakers",
   "type": "module",
   "main": "./dist/index.js",
