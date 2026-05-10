@@ -151,3 +151,13 @@ export { canonicalize, CanonicalMemo } from './util/canonical.js';
 // outbound calls (e.g., embedding APIs) without taking a network dependency.
 export { TokenBucket } from './util/rate-limit.js';
 export type { TokenBucketOptions } from './util/rate-limit.js';
+
+// Error boundaries (Section 5) — provider error classes and utility wrappers.
+export {
+  ProviderTimeoutError,
+  ProviderRateLimitError,
+  MalformedProviderResponseError,
+  withTimeout,
+  withRateLimit,
+  isProviderError,
+} from './errors/provider.js';
