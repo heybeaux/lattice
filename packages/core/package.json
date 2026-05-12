@@ -45,8 +45,8 @@
   },
   "peerDependencies": {
     "@opentelemetry/api": "^1.x",
-    "@opentelemetry/sdk-node": "^0.x",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.x"
+    "@opentelemetry/exporter-trace-otlp-http": "^0.x",
+    "@opentelemetry/sdk-node": "^0.x"
   },
   "peerDependenciesMeta": {
     "@opentelemetry/api": {
@@ -61,6 +61,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "@vitest/coverage-v8": "3.2.4",
     "eslint": "^9.27.0",
     "json-schema-to-typescript": "^15.0.4",
     "tsup": "^8.4.0",

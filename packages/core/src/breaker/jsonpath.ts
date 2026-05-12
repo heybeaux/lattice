@@ -116,9 +116,9 @@ export function compileJSONPath(path: string): CompiledJSONPath {
       if (i >= path.length) {
         throw new Error(`JSONPath dangling '.' at end of '${path}'`);
       }
-      if (path[i] === '.') {
-        throw new Error(`JSONPath recursive descent ('..') is not supported in the L0 subset: '${path}'`);
-      }
+      // No need for a per-token '..' guard here — the early `path.includes('..')`
+      // check above catches every recursive-descent token before we get into
+      // the per-character walk.
       const start = i;
       while (i < path.length && /[A-Za-z0-9_]/.test(path[i])) {
         i++;
