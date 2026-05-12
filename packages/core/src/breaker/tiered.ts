@@ -5,11 +5,19 @@ import { canonicalize, CanonicalMemo } from '../util/canonical.js';
 import { redactContract, type SensitivityLevel } from '../events/redact.js';
 import { isProviderError } from '../errors/provider.js';
 import {
+  compilePolicyRuleSet,
+  evaluatePolicy,
+  firstFailure,
+  formatPolicyDenyReason,
+  type CompiledPolicyRuleSet,
+} from './policy.js';
+import {
   TieredCircuitBreakerConfig,
   ValidationResult,
   ValidationTier,
   EmbeddingProvider,
   JudgeProvider,
+  PolicyEvidenceRow,
 } from './types.js';
 
 /**
@@ -106,6 +114,12 @@ export class TieredCircuitBreaker {
   private readonly breaker: CircuitBreaker;
   private embeddingProvider?: EmbeddingProvider;
   private judgeProvider?: JudgeProvider;
+  /**
+   * L0 policy ruleset, pre-compiled at construction time when
+   * {@link TieredCircuitBreakerConfig.policy} is set. Absent means L0 is a
+   * no-op and the v0.3 L1/L2/L3 ordering applies unchanged.
+   */
+  private readonly compiledPolicy?: CompiledPolicyRuleSet;
 
   constructor(config?: TieredCircuitBreakerConfig) {
     this.config = {
@@ -129,6 +143,15 @@ export class TieredCircuitBreaker {
       failureThreshold: this.config.failureThreshold,
       recoveryTimeoutMs: this.config.recoveryTimeoutMs,
     });
+
+    // Compile the L0 policy ruleset once at construction. This validates
+    // rule IDs, JSONPath syntax, regex syntax, numeric ops, and the
+    // conditional invariant (rule.jsonpath === when.jsonpath). Throwing
+    // here is intentional — a malformed policy must surface at startup,
+    // not on the first handoff.
+    if (config?.policy) {
+      this.compiledPolicy = compilePolicyRuleSet(config.policy);
+    }
   }
 
   /**
@@ -194,13 +217,72 @@ export class TieredCircuitBreaker {
       };
     }
 
-    const isAuto = this.config.tier === 'auto';
-
-    if (isAuto) {
-      return this.validateAuto(contract);
+    // L0 runs FIRST when a policy is bound (Spec 1 R1). A failure is a
+    // hard-no and SKIPS L1/L2/L3 entirely. The breaker mutates
+    // `contract.metadata.l0` in place — StateContract's `Object.freeze` is
+    // shallow, so the `metadata` interior is writeable.
+    const tiersRun: ValidationTier[] = [];
+    if (this.compiledPolicy) {
+      const l0 = this.runL0(contract);
+      tiersRun.push('L0');
+      if (!l0.passed) {
+        this.breaker.recordFailure();
+        return { ...l0, tiersRun };
+      }
     }
 
-    return this.validateManual(contract);
+    const isAuto = this.config.tier === 'auto';
+    const downstream = isAuto
+      ? await this.validateAuto(contract)
+      : await this.validateManual(contract);
+
+    // Merge any downstream `tiersRun` (validateAuto/validateManual populate
+    // them) with the L0 prefix. When L0 didn't run, `tiersRun` is just
+    // whatever the downstream produced.
+    const merged: ValidationTier[] = [
+      ...tiersRun,
+      ...(downstream.tiersRun ?? []),
+    ];
+    return { ...downstream, tiersRun: merged };
+  }
+
+  /**
+   * Run the L0 policy tier. Stamps `contract.metadata.l0` with the evidence
+   * trail and returns a {@link ValidationResult} reflecting the first
+   * failing row (if any). Pure of side effects beyond the metadata stamp
+   * and Date.now() for `durationMs`.
+   */
+  private runL0(contract: StateContract): ValidationResult {
+    // compiledPolicy is checked by the caller; assert it for the type narrow.
+    const compiled = this.compiledPolicy!;
+    const start = Date.now();
+    const evidence: PolicyEvidenceRow[] = evaluatePolicy(contract, compiled);
+    const durationMs = Date.now() - start;
+
+    // Spec 1 R6: stamp `metadata.l0` regardless of pass/fail so adapters
+    // (Parliament, Sonder) can emit the audit trail.
+    contract.metadata.l0 = {
+      ruleSetId: compiled.id,
+      ruleSetVersion: compiled.version,
+      evidence,
+      durationMs,
+    };
+
+    const failed = firstFailure(evidence);
+    if (failed) {
+      // Mark the contract as rejected so observers can tell L0-denied
+      // contracts apart from passing ones without re-evaluating the
+      // ruleset. The mutation matches the L1/L2/L3 status invariants.
+      (contract.metadata as Record<string, unknown>).validationStatus = 'rejected';
+      return {
+        passed: false,
+        tier: 'L0',
+        durationMs,
+        reason: formatPolicyDenyReason(compiled, failed.ruleId),
+      };
+    }
+
+    return { passed: true, tier: 'L0', durationMs };
   }
 
   /**
@@ -231,13 +313,15 @@ export class TieredCircuitBreaker {
   ): Promise<ValidationResult> {
     const start = Date.now();
     let lastResult: ValidationResult | null = null;
+    const tiersRun: ValidationTier[] = [];
 
     // L1: Always run
     const l1 = this.validateL1(contract, start);
+    tiersRun.push('L1');
     lastResult = l1;
     if (!l1.passed) {
       this.breaker.recordFailure();
-      return l1;
+      return { ...l1, tiersRun };
     }
 
     // Build canon lazily only when entering L2/L3 logic (when providers are configured).
@@ -258,10 +342,11 @@ export class TieredCircuitBreaker {
     if (this.embeddingProvider) {
       if (!canon) canon = this.buildProviderCanon(contract);
       const l2 = await this.validateL2(contract, Date.now(), canon);
+      tiersRun.push('L2');
       lastResult = l2;
       if (!l2.passed) {
         this.breaker.recordFailure();
-        return l2;
+        return { ...l2, tiersRun };
       }
       // Extract similarity for escalation decision
       l2Similarity = l2.confidence ?? null;
@@ -274,15 +359,16 @@ export class TieredCircuitBreaker {
     if ((needsEscalation || isHighRisk) && this.judgeProvider) {
       if (!canon) canon = this.buildProviderCanon(contract);
       const l3 = await this.validateL3(contract, Date.now(), canon);
+      tiersRun.push('L3');
       lastResult = l3;
       if (!l3.passed) {
         this.breaker.recordFailure();
-        return l3;
+        return { ...l3, tiersRun };
       }
     }
 
     this.breaker.recordSuccess();
-    return lastResult!;
+    return { ...lastResult!, tiersRun };
   }
 
   /**
@@ -293,6 +379,7 @@ export class TieredCircuitBreaker {
   ): Promise<ValidationResult> {
     const enabledTiers = this.getEnabledTiers();
     let lastResult: ValidationResult | null = null;
+    const tiersRun: ValidationTier[] = [];
 
     // Build canon lazily only when entering L2/L3 logic (when tier !== 'L1').
     let canon: PayloadCanon | undefined;
@@ -302,15 +389,16 @@ export class TieredCircuitBreaker {
         canon = this.buildProviderCanon(contract);
       }
       const result = await this.validateTier(contract, tier, canon);
+      tiersRun.push(tier);
       lastResult = result;
       if (!result.passed) {
         this.breaker.recordFailure();
-        return result;
+        return { ...result, tiersRun };
       }
     }
 
     this.breaker.recordSuccess();
-    return lastResult!;
+    return { ...lastResult!, tiersRun };
   }
 
   private getEnabledTiers(): ValidationTier[] {
@@ -337,11 +425,12 @@ export class TieredCircuitBreaker {
 
     switch (tier) {
       case 'L0':
-        // L0 engine is added by Task 5 (openspec/changes/add-l0-policy-rules).
-        // Task 1 only adds the type; reaching this branch indicates a caller
-        // routed an L0 tier here before the engine is wired.
+        // L0 is run as a pre-step inside {@link validate} when a policy
+        // is bound. It is NEVER routed through `getEnabledTiers()` /
+        // `validateManual`, so reaching this branch indicates an internal
+        // routing bug, not a configuration mistake.
         throw new Error(
-          'L0 tier validation not yet wired into TieredCircuitBreaker',
+          'L0 tier must not be dispatched via validateTier — it runs as a pre-step in validate()',
         );
       case 'L1':
         return this.validateL1(contract, start);

@@ -194,8 +194,22 @@ export interface TieredCircuitBreakerConfig {
 export interface ValidationResult {
   /** Whether the contract passed validation */
   passed: boolean;
-  /** Which tier the validation was performed at */
+  /**
+   * Tier at which the final pass/fail was determined. For passing
+   * validations this is the last tier that actually ran. For failing
+   * validations this is the tier that produced the failure.
+   */
   tier: ValidationTier;
+  /**
+   * Ordered list of tiers that actually ran during this validate() call.
+   * Skipped tiers (e.g. L1/L2/L3 after an L0 fail; L2/L3 when no
+   * provider is configured) do NOT appear. Adapters use this to compute
+   * the `+`-joined `governance.tier` field (Spec 1 R8).
+   *
+   * Optional for back-compat — when the breaker has no L0 policy bound,
+   * existing call sites can continue to inspect just `tier`.
+   */
+  tiersRun?: ValidationTier[];
   /** Duration in milliseconds */
   durationMs: number;
   /** Failure reason (if failed) */
