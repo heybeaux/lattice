@@ -23,6 +23,46 @@ export interface RedactOptions {
 }
 
 /**
+ * Options for the top-level {@link redactJson} primitive (Spec 1 R11).
+ */
+export interface RedactJsonOptions {
+  /** Minimum sensitivity level to redact. */
+  sensitivityLevel: SensitivityLevel;
+  /**
+   * JSONPaths that MUST NOT be redacted. If a redaction would land on any
+   * of these paths, {@link redactJson} returns immediately with
+   * `refusalPath` set to the first offending path; no further redactions
+   * are applied. Paths use the same string syntax as the L0 JSONPath
+   * subset (`$`, `.name`, `['name']`, `[idx]`, but NOT `[*]`/`..`).
+   */
+  mustNotRedact?: readonly string[];
+  /** Placeholder for redacted values (default: '[REDACTED]'). */
+  placeholder?: string;
+  /** Additional case-insensitive key names to redact at any depth. */
+  additionalKeyNames?: readonly string[];
+}
+
+/**
+ * Result of a {@link redactJson} call (Spec 1 R11).
+ *
+ * - `redacted` — the (deeply-cloned) tree with sensitive values replaced.
+ * - `fields` — JSONPaths of every field whose value was replaced, in
+ *   traversal order. Duplicates are possible if a pattern matched inside
+ *   a value that a key-name rule had already replaced (the second match
+ *   re-records the path).
+ * - `refusalPath` — if a `mustNotRedact` entry blocked a redaction, the
+ *   first offending JSONPath. When `refusalPath` is set, `fields` reflects
+ *   the redactions that ran BEFORE the refusal short-circuited the pass,
+ *   and `redacted` is the partial result. Sonder (Spec 2) treats any
+ *   non-undefined `refusalPath` as a hard failure.
+ */
+export interface RedactJsonResult {
+  redacted: unknown;
+  fields: string[];
+  refusalPath?: string;
+}
+
+/**
  * Case-insensitive key-name pattern. Matches any property whose key is one of
  * the well-known credential names at ANY depth in the contract tree. Replaces
  * the prior exact-dot-path approach which only matched top-level payload keys
@@ -127,58 +167,135 @@ export function redactContract<TIn = unknown, TOut = unknown>(
   const additionalPaths = options?.additionalPaths ?? [];
   const additionalKeyNames = options?.additionalKeyNames ?? [];
 
+  // Deep-clone before mutation so the caller's contract is unchanged.
   const redacted = JSON.parse(JSON.stringify(contract)) as StateContract<TIn, TOut>;
 
-  const additionalKeySet = new Set(additionalKeyNames.map((k) => k.toLowerCase()));
-
-  // 1. Tree-walk redaction by key name across every traversed section.
+  // Run the shared {@link redactJson} primitive over each TRAVERSED_SECTION
+  // in place. We MUST go section-by-section (not over the whole contract)
+  // because top-level fields like `id`, `traceId`, `timestamp` carry
+  // structurally-required values that look like secrets (e.g. a ULID may
+  // collide with the OpenAI sk- pattern) — historic redactContract has
+  // never touched them and the public signature MUST NOT change.
   for (const section of TRAVERSED_SECTIONS) {
     const node = (redacted as unknown as Record<string, unknown>)[section];
-    if (node !== undefined) {
-      redactByKeyName(node, additionalKeySet, placeholder);
-    }
+    if (node === undefined) continue;
+    // The primitive returns a (possibly new) tree; we re-attach it to the
+    // section slot. For object/array sections JSON.parse already gave us a
+    // fresh reference, but the assignment keeps the code uniform.
+    const r = redactJson(node, {
+      sensitivityLevel: sensitivity,
+      placeholder,
+      additionalKeyNames,
+    });
+    (redacted as unknown as Record<string, unknown>)[section] = r.redacted;
   }
 
-  // 2. Caller-provided dot-paths (root-anchored, exact match, back-compat).
+  // Caller-provided dot-paths (root-anchored, exact match, back-compat).
+  // These run AFTER the section sweep so additionalPaths can still hit
+  // top-level slots that redactJson didn't visit.
   for (const path of additionalPaths) {
     redactPath(redacted, path, placeholder);
   }
 
-  // 3. Provider/secret-token patterns over all string values in traversed
-  //    sections (independent of key name).
-  for (const section of TRAVERSED_SECTIONS) {
-    const node = (redacted as unknown as Record<string, unknown>)[section];
-    if (node !== undefined) {
-      for (const pattern of SECRET_PATTERNS) {
-        redactPattern(node, pattern, placeholder);
-      }
-    }
+  return deepFreeze(redacted) as StateContract<TIn, TOut>;
+}
+
+/**
+ * Top-level redaction primitive (Spec 1 R11). Walks an arbitrary JSON tree
+ * and applies the Lattice secret-detection rules: built-in credential key
+ * names, known token formats, plus PII patterns at medium/high sensitivity.
+ *
+ * Behavior:
+ *
+ *   1. Deep-clones the input via `JSON.parse(JSON.stringify(tree))` so the
+ *      caller's tree is unchanged. (Cyclic input would already throw at the
+ *      stringify step; that matches `redactContract`'s prior behavior.)
+ *   2. Walks the clone and replaces values that match either the built-in
+ *      key-name pattern (`api_key`, `password`, ...) or any caller-supplied
+ *      `additionalKeyNames`.
+ *   3. Walks the clone again with the secret/PII regexes. At `'low'` we run
+ *      only provider-token patterns. At `'medium'` we add emails. At
+ *      `'high'` we add phone/SSN/credit-card.
+ *   4. Each time a value is replaced, the JSONPath of that field is pushed
+ *      onto `result.fields`. The path uses the same syntax as the L0 subset.
+ *   5. If any redaction would land on a path in `mustNotRedact`, the
+ *      primitive short-circuits and returns the offending path in
+ *      `result.refusalPath`. No further redactions are applied. The partial
+ *      tree is still returned in `result.redacted` so callers can inspect it.
+ *
+ * Sonder (Spec 2) consumes this directly. `redactContract` wraps it
+ * section-by-section so the contract's structural top-level fields (id,
+ * traceId, timestamp, ...) stay untouched.
+ *
+ * @param tree - The JSON tree to redact. Mutating the result is safe; the
+ *   input is not modified.
+ * @param opts - Sensitivity level, optional refusal paths, optional
+ *   additional key names, optional placeholder.
+ * @returns A {@link RedactJsonResult}.
+ */
+export function redactJson(tree: unknown, opts: RedactJsonOptions): RedactJsonResult {
+  const sensitivity = opts.sensitivityLevel;
+  const placeholder = opts.placeholder ?? '[REDACTED]';
+  const additionalKeyNames = opts.additionalKeyNames ?? [];
+  const mustNotRedact = new Set(opts.mustNotRedact ?? []);
+  const additionalKeySet = new Set(additionalKeyNames.map((k) => k.toLowerCase()));
+
+  // Deep-clone so the caller's tree is unchanged. Stays consistent with
+  // historic redactContract behavior, including throwing on cycles.
+  const cloned: unknown = tree === undefined ? undefined : JSON.parse(JSON.stringify(tree));
+
+  const fields: string[] = [];
+  // refusalPath is set by the walker as soon as we'd land on a protected path.
+  // We thread it through as a single-slot container so the recursive walker
+  // can short-circuit without throwing.
+  const refusal: { path?: string } = {};
+
+  if (cloned === undefined) {
+    return { redacted: cloned, fields };
+  }
+
+  // 1) Key-name sweep across the whole tree.
+  walkKeyName(cloned, '$', additionalKeySet, placeholder, mustNotRedact, fields, refusal);
+  if (refusal.path) return { redacted: cloned, fields, refusalPath: refusal.path };
+
+  // 2) Provider/secret-token patterns over every string value.
+  for (const pattern of SECRET_PATTERNS) {
+    walkPattern(cloned, '$', pattern, placeholder, mustNotRedact, fields, refusal);
+    if (refusal.path) return { redacted: cloned, fields, refusalPath: refusal.path };
   }
 
   if (sensitivity === 'medium' || sensitivity === 'high') {
-    for (const section of TRAVERSED_SECTIONS) {
-      const node = (redacted as unknown as Record<string, unknown>)[section];
-      if (node !== undefined) {
-        redactPattern(node, EMAIL_PATTERN, placeholder);
-      }
-    }
+    walkPattern(cloned, '$', EMAIL_PATTERN, placeholder, mustNotRedact, fields, refusal);
+    if (refusal.path) return { redacted: cloned, fields, refusalPath: refusal.path };
   }
 
   if (sensitivity === 'high') {
-    for (const section of TRAVERSED_SECTIONS) {
-      const node = (redacted as unknown as Record<string, unknown>)[section];
-      if (node === undefined) continue;
-      for (const pattern of PHONE_PATTERNS) {
-        redactPattern(node, pattern, placeholder);
-      }
-      for (const pattern of SSN_PATTERNS) {
-        redactPattern(node, pattern, placeholder);
-      }
-      redactPattern(node, CREDIT_CARD_PATTERN, placeholder);
+    for (const pattern of PHONE_PATTERNS) {
+      walkPattern(cloned, '$', pattern, placeholder, mustNotRedact, fields, refusal);
+      if (refusal.path) return { redacted: cloned, fields, refusalPath: refusal.path };
     }
+    for (const pattern of SSN_PATTERNS) {
+      walkPattern(cloned, '$', pattern, placeholder, mustNotRedact, fields, refusal);
+      if (refusal.path) return { redacted: cloned, fields, refusalPath: refusal.path };
+    }
+    walkPattern(cloned, '$', CREDIT_CARD_PATTERN, placeholder, mustNotRedact, fields, refusal);
+    if (refusal.path) return { redacted: cloned, fields, refusalPath: refusal.path };
   }
 
-  return deepFreeze(redacted) as StateContract<TIn, TOut>;
+  return { redacted: cloned, fields };
+}
+
+/** Concatenate the parent JSONPath with a child key-name step. */
+function joinKey(parent: string, key: string): string {
+  // Identifier keys use the dot form; non-identifier keys use bracket form
+  // so the resulting path round-trips through compileJSONPath.
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) return `${parent}.${key}`;
+  return `${parent}['${key}']`;
+}
+
+/** Concatenate the parent JSONPath with a child array-index step. */
+function joinIndex(parent: string, idx: number): string {
+  return `${parent}[${idx}]`;
 }
 
 /**
@@ -218,35 +335,54 @@ function deepFreeze<T>(obj: T): T {
 }
 
 /**
- * Walk an object tree and replace any property whose key (case-insensitive)
- * matches the built-in {@link SENSITIVE_KEY_PATTERN} or the caller's
- * additional set. Arrays and nested objects are descended recursively.
+ * Walk an object tree (recording its JSONPath) and replace any property
+ * whose key (case-insensitive) matches the built-in
+ * {@link SENSITIVE_KEY_PATTERN} or the caller's additional set.
  *
- * Note: we mutate in place because the caller already deep-cloned via
- * `JSON.parse(JSON.stringify(...))`.
+ * Each replacement pushes the field's JSONPath onto `fields`. If the field's
+ * path matches an entry in `mustNotRedact`, the walker writes the first
+ * offending path into `refusal.path` and returns without redacting it.
+ * Callers check `refusal.path` after the walker returns.
+ *
+ * Mutates `node` in place; the caller is responsible for deep-cloning first.
  */
-function redactByKeyName(
+function walkKeyName(
   node: unknown,
+  path: string,
   additional: ReadonlySet<string>,
   placeholder: string,
+  mustNotRedact: ReadonlySet<string>,
+  fields: string[],
+  refusal: { path?: string },
 ): void {
+  if (refusal.path) return;
   if (node === null || typeof node !== 'object') return;
 
   if (Array.isArray(node)) {
-    for (const item of node) redactByKeyName(item, additional, placeholder);
+    for (let i = 0; i < node.length; i++) {
+      walkKeyName(node[i], joinIndex(path, i), additional, placeholder, mustNotRedact, fields, refusal);
+      if (refusal.path) return;
+    }
     return;
   }
 
   const obj = node as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
+    if (refusal.path) return;
     const lower = key.toLowerCase();
+    const childPath = joinKey(path, key);
     if (SENSITIVE_KEY_PATTERN.test(lower) || additional.has(lower)) {
+      if (mustNotRedact.has(childPath)) {
+        refusal.path = childPath;
+        return;
+      }
       obj[key] = placeholder;
+      fields.push(childPath);
       continue;
     }
     const value = obj[key];
     if (value !== null && typeof value === 'object') {
-      redactByKeyName(value, additional, placeholder);
+      walkKeyName(value, childPath, additional, placeholder, mustNotRedact, fields, refusal);
     }
   }
 }
@@ -273,37 +409,72 @@ function redactPath(obj: unknown, path: string, placeholder: string): void {
 }
 
 /**
- * Redact substrings matching `pattern` inside every string value reached
- * by walking `obj`. Non-string values are descended (arrays + objects).
+ * Walk a tree (recording its JSONPath) and run `pattern.replace` against
+ * every string value. Non-string values descend; matching values are
+ * replaced with `placeholder` and their JSONPath is pushed onto `fields`.
  *
- * IMPORTANT: regex `lastIndex` is reset before each `String.replace` because
- * stateful `/g` regexes shared at module scope can otherwise skip matches
- * after the first call.
+ * Mutates in place. As with {@link walkKeyName}, `mustNotRedact` short-
+ * circuits the walk by writing the first offending path into
+ * `refusal.path`.
+ *
+ * IMPORTANT: `pattern.lastIndex = 0` is reset before each `String.replace`
+ * because stateful `/g` regexes shared at module scope can otherwise skip
+ * matches after the first call.
  */
-function redactPattern(obj: unknown, pattern: RegExp, placeholder: string): void {
-  if (obj === null || typeof obj !== 'object') return;
+function walkPattern(
+  node: unknown,
+  path: string,
+  pattern: RegExp,
+  placeholder: string,
+  mustNotRedact: ReadonlySet<string>,
+  fields: string[],
+  refusal: { path?: string },
+): void {
+  if (refusal.path) return;
+  if (node === null || typeof node !== 'object') return;
 
-  if (Array.isArray(obj)) {
-    for (let i = 0; i < obj.length; i++) {
-      const v = obj[i];
+  if (Array.isArray(node)) {
+    for (let i = 0; i < node.length; i++) {
+      if (refusal.path) return;
+      const v = node[i];
+      const childPath = joinIndex(path, i);
       if (typeof v === 'string') {
         pattern.lastIndex = 0;
-        obj[i] = v.replace(pattern, placeholder);
+        if (pattern.test(v)) {
+          if (mustNotRedact.has(childPath)) {
+            refusal.path = childPath;
+            return;
+          }
+          pattern.lastIndex = 0;
+          node[i] = v.replace(pattern, placeholder);
+          fields.push(childPath);
+        }
       } else if (v !== null && typeof v === 'object') {
-        redactPattern(v, pattern, placeholder);
+        walkPattern(v, childPath, pattern, placeholder, mustNotRedact, fields, refusal);
       }
     }
     return;
   }
 
+  const obj = node as Record<string, unknown>;
   for (const key of Object.keys(obj)) {
-    const value = (obj as Record<string, unknown>)[key];
+    if (refusal.path) return;
+    const value = obj[key];
+    const childPath = joinKey(path, key);
 
     if (typeof value === 'string') {
       pattern.lastIndex = 0;
-      (obj as Record<string, unknown>)[key] = value.replace(pattern, placeholder);
+      if (pattern.test(value)) {
+        if (mustNotRedact.has(childPath)) {
+          refusal.path = childPath;
+          return;
+        }
+        pattern.lastIndex = 0;
+        obj[key] = value.replace(pattern, placeholder);
+        fields.push(childPath);
+      }
     } else if (typeof value === 'object' && value !== null) {
-      redactPattern(value, pattern, placeholder);
+      walkPattern(value, childPath, pattern, placeholder, mustNotRedact, fields, refusal);
     }
   }
 }

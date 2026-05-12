@@ -144,22 +144,24 @@ describe('verifyCustomRuleDeterminism', () => {
   });
 
   it('produces identical fixtures across runs for the same seed', () => {
-    // A rule that branches on the fixture content (not on call ordering)
-    // forces the harness to pin its offending fixture to a specific fixture
-    // index — and same-seed runs should always pick the same index.
-    const flakyRule = baseRule('flaky', (c) => {
-      // Non-deterministic body: alternates yes/no on consecutive calls for
-      // the same fixture only when the fixture's tool field equals a sentinel.
-      const tool = (c.outputs as { payload?: { tool?: unknown } }).payload?.tool;
-      if (tool === 'unknown_tool') return Math.random() > 0.5;
-      return true;
-    });
-    const runA = verifyCustomRuleDeterminism(flakyRule, { seed: 42 });
-    const runB = verifyCustomRuleDeterminism(flakyRule, { seed: 42 });
-    expect(runA.passed).toBe(false);
-    expect(runB.passed).toBe(false);
-    // Same seed → same first-offending fixture id.
-    expect(runA.offendingFixture?.id).toBe(runB.offendingFixture?.id);
+    // Collect the deterministic ids the harness exposes on its fixtures.
+    // A pure rule passes; we capture the trace by recording fixture ids
+    // from inside the rule. Same seed → same sequence of ids.
+    const captureIds = (seed: number): string[] => {
+      const ids: string[] = [];
+      const rule = baseRule('capture', (c) => {
+        ids.push(c.id);
+        return true;
+      });
+      const result = verifyCustomRuleDeterminism(rule, { seed, iterations: 5 });
+      expect(result.passed).toBe(true);
+      // Each fixture gets evaluated twice; dedupe to compare the underlying sequence.
+      return Array.from(new Set(ids));
+    };
+    const seqA = captureIds(42);
+    const seqB = captureIds(42);
+    expect(seqA).toEqual(seqB);
+    expect(seqA).toHaveLength(5);
   });
 
   it('different seeds may produce different fixtures', () => {
