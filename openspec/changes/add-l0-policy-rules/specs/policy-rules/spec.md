@@ -79,19 +79,41 @@ The `governance.tier` field in the emitted SonderEvent MUST list only the tiers 
 
 ### R9 — Construction validation
 
-`PolicyRuleSet` construction MUST validate:
+`PolicyRuleSet` construction MUST validate (synchronously, fast — runtime-path only):
 
 - All rule IDs are unique within the set.
 - All JSONPaths parse against the supported subset.
 - All regex patterns compile.
 - All `numeric-bound` ops are one of `<= < >= > ==`.
-- Custom rules pass a 100-iteration determinism fuzz check.
+- Each `custom` rule's `evaluate` is a function (typeof check only).
 
 Failures MUST throw at construction time, not at evaluation time.
 
+**Determinism fuzz is CI-only.** Custom rules MUST pass a 100-iteration determinism fuzz check exposed via `verifyCustomRuleDeterminism(rule, fixtures)` from `@heybeaux/lattice-core/test-helpers`. Projects that ship custom rules MUST run this in their CI as a release gate. Running the fuzz at every `PolicyRuleSet` construction would violate R10's per-rule perf budget and is explicitly out of scope.
+
 ### R10 — Performance budget
 
-L0 evaluation SHOULD complete in under 1ms per rule on a typical-sized StateContract (≤4KB payload). `PolicyRuleSet` construction with more than 100 rules SHOULD emit a console warning.
+L0 evaluation SHOULD complete in under 1ms per rule on a typical-sized StateContract (≤4KB payload). `PolicyRuleSet` construction with more than 100 rules SHOULD emit a console warning. Construction itself MUST complete in under 50ms for a 100-rule set.
+
+### R11 — `redactJson` export
+
+This change MUST export a top-level `redactJson(tree, { sensitivityLevel, mustNotRedact })` primitive from `@heybeaux/lattice-core`. It MUST be the same primitive that backs the existing `redactContract`. The signature is:
+
+```ts
+export function redactJson(
+  tree: unknown,
+  opts: {
+    sensitivityLevel: 'low' | 'medium' | 'high';
+    mustNotRedact?: readonly string[];   // JSONPaths to refuse redacting
+  }
+): {
+  redacted: unknown;
+  fields: string[];                       // JSONPaths of redacted fields
+  refusalPath?: string;                   // first mustNotRedact violation, if any
+};
+```
+
+Sonder (Spec 2) consumes this directly. `redactContract` is refactored to wrap `redactJson`; its public signature does not change.
 
 ## Non-goals
 
