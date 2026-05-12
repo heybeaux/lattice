@@ -18,13 +18,23 @@ Order is sequential. Each task is sized for one focused session.
 ## 3. L0 engine
 
 - [ ] Implement `packages/core/src/breaker/policy.ts` with `evaluatePolicy(contract, ruleSet) -> PolicyEvidenceRow[]`.
-- [ ] Cover all 7 rule kinds (`allowlist`, `denylist`, `regex-deny`, `numeric-bound`, `required`, `forbidden`, `custom`).
+- [ ] Cover all 8 rule kinds (`allowlist`, `denylist`, `regex-deny`, `numeric-bound`, `required`, `forbidden`, `conditional`, `custom`).
+- [ ] `conditional` rule kind: declarative if/then over two JSONPaths. Predicates: `'resolves'`, `'is-truthy'`, `'matches'` (with `value`). Vacuous pass when `when` is not satisfied; fail with `'when-satisfied-then-failed:<then.jsonpath>'` when `when` is satisfied but `then` is not.
 - [ ] Defensive default: unresolved JSONPath produces `outcome='fail'` with `detail='jsonpath did not resolve'` for everything except `forbidden` (passes) and `required` (fails with explicit reason).
 
-## 4. Custom-rule fuzz harness
+## 4. Custom-rule fuzz harness (CI-only per R9)
 
-- [ ] Implement `packages/core/test/policy-fuzz.ts`: generate 100 random `StateContract` shapes; run each `'custom'` rule twice; assert agreement.
-- [ ] Add a contributors' README note: custom rules MUST be pure and sync.
+- [ ] Export `verifyCustomRuleDeterminism(rule, fixtures)` from `@heybeaux/lattice-core/test-helpers` (NOT loaded at construction time).
+- [ ] Helper generates 100 random `StateContract` shapes (or accepts user-supplied fixtures), runs each `'custom'` rule twice on each, asserts agreement.
+- [ ] Contributors' README note: custom rules MUST be pure + sync; ship this helper in your CI as a release gate.
+
+## 4.5. Extract `redactJson` primitive (Spec 1 R11)
+
+- [ ] Extract a top-level `redactJson(tree, { sensitivityLevel, mustNotRedact })` primitive in `packages/core/src/contract/redact.ts` (or wherever `redactContract` currently lives).
+- [ ] Re-implement `redactContract` on top of `redactJson`. Public signature of `redactContract` MUST NOT change.
+- [ ] Export `redactJson` from `packages/core/src/index.ts` so Sonder can `import { redactJson } from '@heybeaux/lattice-core'`.
+- [ ] Return shape `{ redacted, fields, refusalPath? }` per Spec 1 R11.
+- [ ] Tests: parity test confirming `redactContract(c, opts)` produces the same result as the wrapped `redactJson` call for 10+ representative inputs.
 
 ## 5. Wire L0 into the breaker
 
