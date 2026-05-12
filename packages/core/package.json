@@ -10,6 +10,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./test-helpers": {
+      "import": "./dist/test-helpers.js",
+      "types": "./dist/test-helpers.d.ts"
     }
   },
   "files": [
@@ -17,7 +21,7 @@
     "schema"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --sourcemap",
+    "build": "tsup src/index.ts src/test-helpers.ts --format esm --dts --sourcemap",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
