@@ -21,9 +21,12 @@ import type {
   ConsensusReducerConfig,
   StateContract,
   EmbeddingProvider,
+  PolicyEvidenceRow,
+  TieredValidationResult,
+  ValidationTier,
 } from '@heybeaux/lattice-core';
 
-export type { EmbeddingProvider };
+export type { EmbeddingProvider, PolicyEvidenceRow };
 
 // ─── Types ────────────────────────────────────────────────
 
@@ -321,6 +324,124 @@ export async function runParliamentDeliberation(
     totalDurationMs: Date.now() - start,
     traceId,
   };
+}
+
+// ─── Governance / Sonder envelope ────────────────────────
+
+/**
+ * Shape of the `governance` block on a SonderEvent envelope. Surfaces the
+ * L0 evidence row trail produced by the Lattice breaker plus the
+ * `+`-joined list of tiers that actually ran.
+ *
+ * - `tier` is `'+'`-joined and includes only tiers that ran (Spec 1 R8).
+ *   Skipped tiers (e.g. L1/L2/L3 after an L0 fail) MUST NOT appear.
+ * - `evidence` carries the full per-rule audit trail from L0. Empty array
+ *   when no policy was bound; absent only when no validation ran at all.
+ * - `policySet` / `policySetVersion` mirror the bound `PolicyRuleSet`.
+ *   Present iff L0 ran; absent otherwise.
+ */
+export interface SonderGovernanceBlock {
+  /** `+`-joined list of tiers that actually ran (e.g. `'L0+L1'`). */
+  tier: string;
+  /** Pass/fail/uncertain — derived from the underlying ValidationResult. */
+  verdict: 'pass' | 'fail';
+  /** L0 evidence rows, in rule-set order. Empty array when L0 didn't run. */
+  evidence: PolicyEvidenceRow[];
+  /** PolicyRuleSet.id when L0 ran. */
+  policySet?: string;
+  /** PolicyRuleSet.version when L0 ran. */
+  policySetVersion?: string;
+  /** Optional reject reason — present when verdict === 'fail'. */
+  reason?: string;
+}
+
+/**
+ * Build the SonderEvent `governance` block from a Lattice contract +
+ * the breaker's {@link TieredValidationResult}. Pulls L0 evidence /
+ * policy identifiers from `contract.metadata.l0` (when present) and
+ * computes the `+`-joined `tier` string from `validation.tiersRun`.
+ *
+ * Spec 1 R8: `tier` lists only tiers that actually ran. Spec 1 R7:
+ * downstream signers consume this block and apply the sign-refusal rule.
+ */
+export function buildGovernanceBlock(
+  contract: StateContract,
+  validation: TieredValidationResult,
+): SonderGovernanceBlock {
+  const l0 = (contract.metadata as {
+    l0?: {
+      ruleSetId: string;
+      ruleSetVersion: string;
+      evidence: PolicyEvidenceRow[];
+    };
+  }).l0;
+
+  const tiersRun: ValidationTier[] = validation.tiersRun ?? [validation.tier];
+  const tier = tiersRun.join('+');
+  const verdict: 'pass' | 'fail' = validation.passed ? 'pass' : 'fail';
+
+  const block: SonderGovernanceBlock = {
+    tier,
+    verdict,
+    evidence: l0?.evidence ?? [],
+  };
+  if (l0) {
+    block.policySet = l0.ruleSetId;
+    block.policySetVersion = l0.ruleSetVersion;
+  }
+  if (!validation.passed && validation.reason) {
+    block.reason = validation.reason;
+  }
+  return block;
+}
+
+/**
+ * Error thrown by {@link assertSonderEventSignable} when a SonderEvent
+ * envelope would violate Spec 1 R7's signing invariant. The `code`
+ * field is a stable machine identifier; the message is human-facing.
+ */
+export class SignRefusedError extends Error {
+  constructor(
+    /**
+     * Stable identifier — currently always `'l0-evidence-missing'`,
+     * reserved for future R7 violations.
+     */
+    public readonly code: 'l0-evidence-missing',
+    message?: string,
+  ) {
+    super(message ?? `Sonder sign refused: ${code}`);
+    this.name = 'SignRefusedError';
+  }
+}
+
+/**
+ * Spec 1 R7 — refuse to sign a SonderEvent whose `governance.tier`
+ * mentions any of `L1`, `L2`, `L3` but whose `governance.evidence` is
+ * empty or absent. Sonder's runtime calls this immediately before the
+ * ed25519 signing step; throwing here aborts the signature.
+ *
+ * Why this matters: without L0 evidence the audit trail cannot prove
+ * the deterministic policy tier ran, so cryptographic provenance over
+ * the validation chain would be a lie. Refusing to sign is the
+ * cheapest enforcement boundary in the system.
+ *
+ * @throws {SignRefusedError} when the envelope violates R7.
+ */
+export function assertSonderEventSignable(
+  governance: SonderGovernanceBlock,
+): void {
+  const tiers = governance.tier.split('+');
+  const mentionsLaterTiers =
+    tiers.includes('L1') || tiers.includes('L2') || tiers.includes('L3');
+  const evidence = governance.evidence;
+  const evidenceMissing = !evidence || evidence.length === 0;
+
+  if (mentionsLaterTiers && evidenceMissing) {
+    throw new SignRefusedError(
+      'l0-evidence-missing',
+      `Sonder sign refused (l0-evidence-missing): governance.tier="${governance.tier}" mentions L1/L2/L3 but governance.evidence is empty`,
+    );
+  }
 }
 
 

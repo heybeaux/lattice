@@ -5,6 +5,8 @@
  * carrying inputs, decisions, outputs, constraints, and assumptions.
  */
 
+import type { PolicyEvidenceRow } from '../breaker/types.js';
+
 /** Decision types an agent can record */
 export type DecisionType =
   | 'action'
@@ -62,6 +64,27 @@ export interface ContractPayload<T = unknown> {
 }
 
 /**
+ * Known, Lattice-owned slots that may appear inside `StateContract.metadata`.
+ *
+ * `metadata` stays typed as `Record<string, unknown>` for back-compat; this overlay
+ * documents the slots Lattice itself reads/writes so consumers can narrow with
+ * `metadata as Record<string, unknown> & LatticeMetadata` where useful.
+ */
+export interface LatticeMetadata {
+  /**
+   * Populated by the L0 policy-rules tier when `TieredCircuitBreakerConfig.policy`
+   * is set. Absent otherwise.
+   */
+  l0?: {
+    ruleSetId: string;
+    ruleSetVersion: string;
+    evidence: PolicyEvidenceRow[];
+    /** Wall time of L0 evaluation. */
+    durationMs: number;
+  };
+}
+
+/**
  * The State Contract — the core data structure of Lattice.
  *
  * Every agent handoff produces exactly one State Contract, which serves as:
@@ -96,8 +119,12 @@ export interface StateContract<TIn = unknown, TOut = unknown> {
   assumptions: Assumption[];
   /** Resources consumed */
   budget: BudgetRecord;
-  /** Optional free-form metadata */
-  metadata: Record<string, unknown>;
+  /**
+   * Optional free-form metadata. Lattice-owned slots are described by
+   * {@link LatticeMetadata} (e.g., `metadata.l0` carries L0 policy evidence
+   * when a `PolicyRuleSet` is bound to the breaker).
+   */
+  metadata: Record<string, unknown> & LatticeMetadata;
 }
 
 /** Current schema version for emitted contracts */

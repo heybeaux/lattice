@@ -10,6 +10,10 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./test-helpers": {
+      "import": "./dist/test-helpers.js",
+      "types": "./dist/test-helpers.d.ts"
     }
   },
   "files": [
@@ -17,7 +21,7 @@
     "schema"
   ],
   "scripts": {
-    "build": "tsup src/index.ts --format esm --dts --sourcemap",
+    "build": "tsup src/index.ts src/test-helpers.ts --format esm --dts --sourcemap",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -45,8 +49,8 @@
   },
   "peerDependencies": {
     "@opentelemetry/api": "^1.x",
-    "@opentelemetry/sdk-node": "^0.x",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.x"
+    "@opentelemetry/exporter-trace-otlp-http": "^0.x",
+    "@opentelemetry/sdk-node": "^0.x"
   },
   "peerDependenciesMeta": {
     "@opentelemetry/api": {
@@ -61,6 +65,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "@vitest/coverage-v8": "3.2.4",
     "eslint": "^9.27.0",
     "json-schema-to-typescript": "^15.0.4",
     "tsup": "^8.4.0",

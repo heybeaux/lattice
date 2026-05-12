@@ -55,6 +55,11 @@ export type {
   EmbeddingProvider,
   JudgeProvider,
   JudgeResult,
+  PolicyRuleKind,
+  PolicyRule,
+  PolicyRuleSet,
+  PolicyEvidenceRow,
+  ConditionalPredicate,
 } from './breaker/types.js';
 
 // Circuit Breaker
@@ -97,8 +102,13 @@ export { ConfigValidationError } from './config/loader.js';
 export type { LatticeConfig } from './config/loader.js';
 
 // Redaction
-export { redactContract } from './events/redact.js';
-export type { RedactOptions, SensitivityLevel } from './events/redact.js';
+export { redactContract, redactJson } from './events/redact.js';
+export type {
+  RedactOptions,
+  RedactJsonOptions,
+  RedactJsonResult,
+  SensitivityLevel,
+} from './events/redact.js';
 
 // ConsensusReducer
 export { ConsensusReducer } from './reducer/consensus.js';
