@@ -782,6 +782,26 @@ describe('evaluatePolicy — custom', () => {
     expect(row.detail).toMatch(/custom evaluate threw: boom/);
   });
 
+  it('falls back to "unknown error" when thrown Error has empty message', () => {
+    // Branch coverage for the `?? 'unknown error'` fallback in evalCustom.
+    const set = mkSet([
+      {
+        id: 'custom-throws-empty',
+        description: 'd',
+        jsonpath: '$',
+        kind: 'custom',
+        evaluate: () => {
+          // Throw a non-Error object with no .message — exercises the
+          // `(err as Error).message ?? 'unknown error'` fallback path.
+          throw { not: 'an-error' };
+        },
+      },
+    ]);
+    const [row] = evaluatePolicy(mkContract({}), compilePolicyRuleSet(set));
+    expect(row.outcome).toBe('fail');
+    expect(row.detail).toMatch(/custom evaluate threw: unknown error/);
+  });
+
   it('fails when evaluate returns non-boolean', () => {
     const set = mkSet([
       {
