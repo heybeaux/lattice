@@ -19,7 +19,13 @@ export type PolicyRuleKind =
   | 'numeric-bound'
   | 'required'
   | 'forbidden'
+  | 'conditional'
   | 'custom';
+
+export type ConditionalPredicate =
+  | { jsonpath: string; predicate: 'resolves' }
+  | { jsonpath: string; predicate: 'is-truthy' }
+  | { jsonpath: string; predicate: 'matches'; value: string };
 
 export interface PolicyRuleBase {
   /** Stable identifier across versions. Used for evidence rows and audit. */
@@ -42,8 +48,18 @@ export type PolicyRule =
   | (PolicyRuleBase & { kind: 'required' })
   | (PolicyRuleBase & { kind: 'forbidden' })
   | (PolicyRuleBase & {
+      kind: 'conditional';
+      /** Antecedent. When this predicate is satisfied, `then` MUST be satisfied. */
+      when: ConditionalPredicate;
+      /** Consequent. Required only when `when` is satisfied. */
+      then: ConditionalPredicate;
+      /** PolicyRuleBase.jsonpath for conditional rules MUST equal when.jsonpath
+       *  (so evidence rows surface the path that triggered evaluation). */
+    })
+  | (PolicyRuleBase & {
       kind: 'custom';
-      /** Pure, deterministic, sync. Receives the canonicalized contract. */
+      /** Pure, deterministic, sync. Receives the canonicalized contract.
+       *  Prefer `conditional` for cross-field invariants. */
       evaluate: (contract: StateContract) => boolean;
     });
 
