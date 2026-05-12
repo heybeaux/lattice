@@ -439,7 +439,7 @@ export function assertSonderEventSignable(
   if (mentionsLaterTiers && evidenceMissing) {
     throw new SignRefusedError(
       'l0-evidence-missing',
-      `Sonder sign refused: governance.tier="${governance.tier}" mentions L1/L2/L3 but governance.evidence is empty`,
+      `Sonder sign refused (l0-evidence-missing): governance.tier="${governance.tier}" mentions L1/L2/L3 but governance.evidence is empty`,
     );
   }
 }
