@@ -232,11 +232,15 @@ export function compilePolicyRuleSet(set: PolicyRuleSet): CompiledPolicyRuleSet 
         break;
       }
       default: {
-        // Exhaustiveness check: TypeScript widens this branch to `never`,
-        // and the runtime guard catches unknown kinds passed from JS.
-        const _exhaustive: never = rule;
+        // Runtime guard for unknown kinds passed from JS callers. The earlier
+        // typeof checks on `rule.id` / `rule.description` / `rule.jsonpath` —
+        // fields typed `string` on every union variant — cause TS to lose
+        // discriminated-union narrowing by the time we reach this branch, so
+        // we can't use `const _: never = rule` here. The cast surfaces `kind`.
         throw new Error(
-          `PolicyRuleSet '${set.id}': unknown rule kind on rule (${(_exhaustive as { kind?: unknown }).kind})`,
+          `PolicyRuleSet '${set.id}': unknown rule kind on rule (${
+            (rule as { kind?: unknown }).kind
+          })`,
         );
       }
     }
