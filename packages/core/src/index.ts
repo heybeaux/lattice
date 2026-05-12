@@ -55,6 +55,11 @@ export type {
   EmbeddingProvider,
   JudgeProvider,
   JudgeResult,
+  PolicyRuleKind,
+  PolicyRule,
+  PolicyRuleSet,
+  PolicyEvidenceRow,
+  ConditionalPredicate,
 } from './breaker/types.js';
 
 // Circuit Breaker

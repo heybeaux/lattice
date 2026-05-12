@@ -336,6 +336,13 @@ export class TieredCircuitBreaker {
     const start = Date.now();
 
     switch (tier) {
+      case 'L0':
+        // L0 engine is added by Task 5 (openspec/changes/add-l0-policy-rules).
+        // Task 1 only adds the type; reaching this branch indicates a caller
+        // routed an L0 tier here before the engine is wired.
+        throw new Error(
+          'L0 tier validation not yet wired into TieredCircuitBreaker',
+        );
       case 'L1':
         return this.validateL1(contract, start);
       case 'L2':
