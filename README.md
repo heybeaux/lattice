@@ -8,7 +8,7 @@
 [![PyPI](https://img.shields.io/pypi/v/lattice-langgraph.svg)](https://pypi.org/project/lattice-langgraph/)
 [![PyPI](https://img.shields.io/pypi/v/lattice-crewai.svg)](https://pypi.org/project/lattice-crewai/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Benchmark](https://img.shields.io/badge/benchmark-93%25_pass_rate-green)](https://github.com/heybeaux/lattice/tree/main/benchmark)
+[![Benchmark](https://img.shields.io/badge/benchmark-real_results-green)](https://github.com/heybeaux/lattice/tree/main/benchmark)
 
 > Like threading libraries for concurrent programming — but for AI agents.
 
@@ -18,59 +18,49 @@ Multi-agent AI systems fail at high rates due to **structural coordination failu
 
 | Package | Version | Status | Notes |
 |---------|---------|--------|-------|
-| `@heybeaux/lattice-core` | v0.2.0 | ✅ Published | State Contracts, Circuit Breakers, Pipeline, Redaction, Events, Compliance, ConsensusReducer |
-| `@heybeaux/lattice-provider-openai` | v0.2.0 | ✅ Published | L2 embeddings + L3 LLM-as-judge via OpenAI |
+| `@heybeaux/lattice-core` | v0.3.0 | ✅ Published | State Contracts, Circuit Breakers, Pipeline, Redaction, Events, Compliance, ConsensusReducer, L0 Policy Rules, Config, OTel |
+| `@heybeaux/lattice-provider-openai` | v0.2.0 | ✅ Published | L2 embeddings + L3 LLM-as-judge via OpenAI, timeout support |
 | `@heybeaux/lattice-adapter-mastra` | v0.2.0 | ✅ Published | wrapMastraStep() + createLatticePipeline() |
+| `@heybeaux/lattice-adapter-parliament` | v0.3.0 | ✅ Published | Parliament reasoning integration |
 | `lattice-langgraph` | 0.2.1 | ✅ Published | [PyPI](https://pypi.org/project/lattice-langgraph/) — wrap_node() + LatticeMiddleware, 13 tests |
 | `lattice-crewai` | 0.2.1 | ✅ Published | [PyPI](https://pypi.org/project/lattice-crewai/) — wrap_task() + LatticeCrewMiddleware, 15 tests |
 
-## Real Benchmark Results (May 8, 2026)
+## Benchmarks
 
-13 test scenarios with **actual OpenAI API calls** (gpt-4o-mini, no projections):
+Two benchmarks ship with the repo — run them yourself with real API keys.
 
-| Metric | Result |
-|--------|--------|
-| **Overall accuracy** | **85%** (11/13 correct) |
-| **L3 semantic detection** | **100%** (6/6 hallucinations caught) |
-| **False positive rate** | **0%** (4/4 correct outputs passed) |
-| **False negatives** | **0** |
-| **Avg latency (L1+L3)** | 1,174ms (includes LLM round-trip) |
+**Real benchmark** (`benchmark/run-real.ts`) — 13 test scenarios with actual OpenAI API calls (gpt-4o-mini):
+- Structural failures, semantic validation (hallucinations, off-topic, contradictions), false-positive rejection, and redaction
+- Run: `npx tsx benchmark/run-real.ts` (requires `OPENAI_API_KEY`)
 
-Run it yourself: `npx tsx benchmark/run-real.ts`
+**Synthetic benchmark** (`benchmark/run.ts`) — 16 fault-injection scenarios, zero dependencies:
+- L1 structural detection: 100% (3/3)
+- Redaction: 100% (3/3)
+- L3 semantic scenarios included but require API key to evaluate
+- Run: `npx tsx benchmark/run.ts`
 
-**What L3 caught every time:**
-- Empty output → confidence 1.00
-- Hallucinated facts (invented dates, events) → confidence 0.90
-- Invented citations → confidence 0.90
-- Completely off-topic content → confidence 0.00
-- Contradictory output → confidence 0.00
-- Partial/incomplete answers → confidence 0.90
+[Full benchmark code →](./benchmark/run-real.ts) · [Synthetic benchmark →](./benchmark/README.md)
 
-**What L3 correctly passed:**
-- Valid summary → confidence 1.00
-- Valid extraction → confidence 0.90
-- Valid formatted report → confidence 0.90
-- Short correct answer → confidence 1.00
-
-[Full benchmark code →](./benchmark/run-real.ts)
-
-## What's Honest About v0.1
+## What's Honest About v0.3
 
 **What works well:**
-- L1 structural validation catches agent crashes and envelope violations 100% of the time
-- L3 semantic validation (with OpenAI provider) catches hallucinations, wrong content, and empty outputs 100% of the time
-- Zero false positives — correct outputs always pass
-- Redaction scrubs API keys, tokens, emails, phone numbers before logging
-- Pipeline builder composes agents with built-in coordination
-- Full audit trail: every handoff produces a State Contract
+- L1 structural validation catches agent crashes and envelope violations deterministically
+- L3 semantic validation catches hallucinations, contradictions, and off-topic content via LLM-as-judge
+- L0 deterministic policy rules (JSONPath evaluator, 8 rule kinds, fuzz-tested) for zero-LLM governance
+- Redaction scrubs API keys, tokens, emails, phone numbers before logging or external calls
+- Pipeline builder composes agents with built-in coordination, retry/abort/degrade recovery, and parallel branches
+- Full audit trail: every handoff produces an immutable State Contract
+- Persistent circuit breaker state survives process restarts
+- Auto-discovery config system (JSON, YAML, TOML, ESM/CJS)
+- Structured observability via JSON-line or OpenTelemetry exporters
+- Framework adapters for LangGraph, CrewAI, Mastra, and Parliament
 
 **What's limited:**
 - L3 adds ~1-2s latency per handoff (LLM round-trip) — only use on critical steps
-- L2 (embedding similarity) is untested with real data — provider exists but no benchmarks
-- No framework adapters yet (LangGraph, CrewAI, AutoGen) — `wrapAgent()` works but requires manual wiring
-- No Reducer primitives (distributed-state synthesis) — the Silo-Bench finding is acknowledged but not addressed in code
-- No dashboard or observability UI — events go to EventEmitter but there's no built-in visualization
-- No production track record — the Forge integration hasn't happened yet
+- L2 embedding similarity has an LRU cache and rate limiter but no published benchmark results yet
+- No observability dashboard UI — events export to JSONL or OTel but you need your own viewer
+- No production track record at scale — the Forge integration plan exists but hasn't shipped
+- Python adapters (LangGraph, CrewAI) are less mature than the TypeScript core
 
 **What's not a product (yet):**
 - This is a library, not a platform. You wire it up yourself.
@@ -257,7 +247,8 @@ See [examples/error-boundaries.ts](./examples/error-boundaries.ts) and [docs/err
 - [**L2 Embedding**](./examples/l2-embedding.ts) — `TieredCircuitBreaker` with OpenAI embeddings
 - [**Observability**](./examples/observability.ts) — `JsonLineExporter` + `OtelExporter` setup
 - [**Error Boundaries**](./examples/error-boundaries.ts) — `withTimeout`, degrade mode
-- [**Real Benchmark**](./benchmark/run-real.ts) — 13 fault scenarios with actual OpenAI API calls
+- [**Real Benchmark**](./benchmark/run-real.ts) — 13 scenarios with actual OpenAI API calls
+- [**Synthetic Benchmark**](./benchmark/run.ts) — 16 fault-injection scenarios, zero deps
 - [**Forge Integration Plan**](./FORGE_INTEGRATION.md) — How to wrap Forge's LinkedIn pipeline
 
 ## Documentation
@@ -274,14 +265,19 @@ See [examples/error-boundaries.ts](./examples/error-boundaries.ts) and [docs/err
 
 | Priority | Task | Status |
 |----------|------|--------|
-| 🔥 | Forge integration (real traces benchmark) | In progress — Rook running 50 topics |
-| ✅ | LangGraph adapter (Python) | **Merged** — wrap_node() + LatticeMiddleware, 13 tests |
-| ✅ | ConsensusReducer (Silo-Bench synthesis fix) | **Built** — majority vote, conflict flagging |
+| 🔥 | Forge integration (real traces benchmark) | Plan written, not yet wired |
+| ✅ | L0 deterministic policy rules | **Shipped** — 8 rule kinds, JSONPath, fuzz-tested |
+| ✅ | LangGraph + CrewAI adapters (Python) | **Published** — PyPI: `lattice-langgraph`, `lattice-crewai` |
+| ✅ | ConsensusReducer | **Built** — majority vote, conflict flagging, embedding similarity |
 | ✅ | `parallel()` + `join()` combinators | **Built** — fan-out/fan-in for DAGs |
-| ✅ | JSON Schema IDL (canonical cross-language) | **Built** — generate:types script |
-| ✅ | adapter-mastra npm publish | **Published** — optional peer dep |
-| 🟡 | L2 real benchmark with Forge data | Waiting on Rook's run |
+| ✅ | Persistent circuit breaker state | **Built** — `JsonFileBackend`, atomic writes |
+| ✅ | Config auto-discovery | **Built** — JSON, YAML, TOML, ESM/CJS |
+| ✅ | OTel + JSON-line observability | **Built** — `OtelExporter`, `JsonLineExporter` |
+| ✅ | Error boundaries | **Built** — typed provider errors, `withTimeout`, `withRateLimit` |
+| ✅ | adapter-parliament | **Shipped** — v0.3.0 |
+| 🟡 | L2 embedding real benchmark | Provider exists, benchmark pending |
 | 🟢 | Observability dashboard | Not started |
+| 🟢 | LangGraph adapter (TypeScript) | Stub in tree, needs work |
 
 ## Ecosystem
 
@@ -291,7 +287,8 @@ Lattice sits between agent frameworks and agents:
 ┌─────────────┐     ┌──────────┐     ┌─────────┐
 │ LangGraph   │────▶│ Lattice  │────▶│ Agents  │
 │ CrewAI      │────▶│ (coord)  │────▶│ (any)   │
-│ AutoGen     │────▶│          │────▶│         │
+│ Mastra      │────▶│          │────▶│         │
+│ Parliament  │────▶│          │────▶│         │
 │ Custom      │────▶│          │────▶│         │
 └─────────────┘     └──────────┘     └─────────┘
                          │
