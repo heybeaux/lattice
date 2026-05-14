@@ -58,7 +58,7 @@ Two benchmarks ship with the repo — run them yourself with real API keys.
 **What's limited:**
 - L3 adds ~1-2s latency per handoff (LLM round-trip) — only use on critical steps
 - L2 embedding similarity has an LRU cache and rate limiter but no published benchmark results yet
-- No observability dashboard UI — events export to JSONL or OTel but you need your own viewer
+- Dashboard exists (`dashboard/`) — React app for JSONL audit log inspection with demo data, run comparison, and CSV/compliance exports. Needs a live integration with JSON-line/OTel streams.
 - No production track record at scale — the Forge integration plan exists but hasn't shipped
 - Python adapters (LangGraph, CrewAI) are less mature than the TypeScript core
 
@@ -276,7 +276,7 @@ See [examples/error-boundaries.ts](./examples/error-boundaries.ts) and [docs/err
 | ✅ | Error boundaries | **Built** — typed provider errors, `withTimeout`, `withRateLimit` |
 | ✅ | adapter-parliament | **Shipped** — v0.3.0 |
 | 🟡 | L2 embedding real benchmark | Provider exists, benchmark pending |
-| 🟢 | Observability dashboard | Not started |
+| 🟡 | Observability dashboard — live stream integration | Dashboard built, needs real-time JSONL/OTel stream connection |
 | 🟢 | LangGraph adapter (TypeScript) | Stub in tree, needs work |
 
 ## Ecosystem
