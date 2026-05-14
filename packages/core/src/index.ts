@@ -177,3 +177,21 @@ export {
   withRateLimit,
   isProviderError,
 } from './errors/provider.js';
+
+// API handler (GIN-7) — null-safe input validation for contract creation.
+export { handleCreateContract, collectValidationErrors, InputValidationError } from './api/handler.js';
+export type {
+  CreateContractRequest,
+  HandlerResponse,
+  HandlerSuccess,
+  HandlerError,
+} from './api/handler.js';
+
+// Session management (GIN-25) — null-safe user session lifecycle.
+export { SessionManager } from './session/session-manager.js';
+export { SessionNotFoundError, SessionInvalidError } from './session/types.js';
+export type {
+  UserSession,
+  SessionStatus,
+  SessionManagerOptions,
+} from './session/types.js';
