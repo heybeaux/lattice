@@ -167,3 +167,22 @@ export {
   withRateLimit,
   isProviderError,
 } from './errors/provider.js';
+
+// Auth token store (GIN-24) — one-time-use and refresh token management.
+// Closes the token reuse vulnerability by enforcing strict consumption
+// semantics on magic links, password resets, email verification, and
+// refresh token rotation.
+export { TokenStore } from './auth/token-store.js';
+export {
+  TokenNotFoundError,
+  TokenAlreadyUsedError,
+  TokenRevokedError,
+  TokenExpiredError,
+} from './auth/token-store.js';
+export type {
+  AuthToken,
+  TokenKind,
+  TokenStatus,
+  RotateResult,
+  TokenStoreOptions,
+} from './auth/token-store.js';
