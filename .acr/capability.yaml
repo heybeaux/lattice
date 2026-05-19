@@ -1,0 +1,48 @@
+name: lattice
+type: capability
+version: 1.0.0
+description: "Governance faculty — coordination infrastructure for multi-agent systems. Owns gate policy (when to pause); Sonder owns the gate mechanism."
+
+provides:
+  - governance-faculty
+  - gate-policy
+  - state-contracts
+
+requires:
+  tools: []
+  capabilities:
+    - ref: sonder
+      optional: false
+  context: []
+
+budget:
+  index: 20
+  summary: 200
+  standard: 1250
+  deep: 2500
+
+activation:
+  triggers:
+    - type: pattern
+      match: "(lattice|state contract|approval_gate|getGateStatus|coordination infrastructure)"
+  trigger_logic: OR
+  co_activates: [sonder]
+  conflicts: []
+
+permissions:
+  data:
+    lattice_metadata: read-only
+
+behavioral:
+  core: |
+    When discussing or working on Lattice:
+    1. Lattice is the GOVERNANCE faculty. Owns gate policy (when to gate); Sonder owns the mechanism (checkGate hook).
+    2. Repo CI pins pnpm@10 with lockfileVersion 9.0. pnpm 8 silently downgrades — breaks CI.
+    3. Use standalone pnpm 10 binary from a fresh path (e.g. /tmp/pnpm10-real) to bypass mise/corepack shims.
+    4. getGateStatus(event) callbacks read from StateContract.approval_gate typically.
+  overlays: []
+
+verification:
+  checklist:
+    - "Used pnpm 10 if installing/building"
+    - "Did not put gate mechanism logic in Lattice (that's Sonder)"
