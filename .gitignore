@@ -11,3 +11,4 @@ packages/core/test/*.lock
 packages/core/test/*.corrupt.*
 .venv/*
 .history/*
+coverage/

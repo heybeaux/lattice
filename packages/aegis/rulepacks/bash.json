@@ -1,0 +1,571 @@
+{
+  "packId": "aegis-builtin-bash",
+  "version": "1.0.0",
+  "source": "ported from AutoHarness autoharness/rules/builtin.py (bash category)",
+  "rules": [
+    {
+      "id": "bash.rm-rf-root",
+      "category": "bash",
+      "severity": "critical",
+      "description": "rm -rf / — recursive force-delete from root",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\brm\\s+-[^\\s]*r[^\\s]*f[^\\s]*\\s+/|\\brm\\s+-[^\\s]*f[^\\s]*r[^\\s]*\\s+/",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.rm-rf-home",
+      "category": "bash",
+      "severity": "critical",
+      "description": "rm -rf ~/ — recursive force-delete from home directory",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\brm\\s+-[^\\s]*r[^\\s]*f[^\\s]*\\s+~/|\\brm\\s+-[^\\s]*f[^\\s]*r[^\\s]*\\s+~/",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.rm-no-preserve-root",
+      "category": "bash",
+      "severity": "critical",
+      "description": "rm --no-preserve-root — bypasses rm's built-in safety",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\brm\\s+.*--no-preserve-root\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.fork-bomb",
+      "category": "bash",
+      "severity": "critical",
+      "description": "Fork bomb :(){ :|:& };:",
+      "match": {
+        "kind": "regex",
+        "pattern": ":\\s*\\(\\)\\s*\\{\\s*:\\s*\\|\\s*:\\s*&\\s*\\}\\s*;\\s*:",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.mkfs",
+      "category": "bash",
+      "severity": "critical",
+      "description": "Filesystem format command",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bmkfs\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.dd-to-device",
+      "category": "bash",
+      "severity": "critical",
+      "description": "dd writing directly to block device",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bdd\\b.*\\bof\\s*=\\s*/dev/[a-z]",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.pipe-to-shell",
+      "category": "bash",
+      "severity": "critical",
+      "description": "Pipe-to-shell — remote code execution via curl|bash or wget|sh",
+      "match": {
+        "kind": "regex",
+        "pattern": "(curl|wget)\\s+[^|]*\\|\\s*(ba)?sh",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.download-and-execute",
+      "category": "bash",
+      "severity": "critical",
+      "description": "Download-and-execute chain — download then make executable",
+      "match": {
+        "kind": "regex",
+        "pattern": "(curl|wget)\\s+.*&&\\s*chmod\\s+\\+x\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.redirect-to-block-device",
+      "category": "bash",
+      "severity": "critical",
+      "description": "Direct write redirect to raw block device",
+      "match": {
+        "kind": "regex",
+        "pattern": ">\\s*/dev/(sd[a-z]|nvme|hd[a-z]|vd[a-z]|disk)",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.sudo",
+      "category": "bash",
+      "severity": "high",
+      "description": "Elevated privileges via sudo",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bsudo\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.chmod-777",
+      "category": "bash",
+      "severity": "high",
+      "description": "chmod 777 — world-writable permissions",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bchmod\\s+777\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.git-force-push",
+      "category": "bash",
+      "severity": "high",
+      "description": "git push --force — destructive remote rewrite",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bgit\\s+push\\s+.*--force\\b|\\bgit\\s+push\\s+-f\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.git-reset-hard",
+      "category": "bash",
+      "severity": "high",
+      "description": "git reset --hard — destroys uncommitted changes",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bgit\\s+reset\\s+--hard\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.sql-drop",
+      "category": "bash",
+      "severity": "high",
+      "description": "SQL DROP TABLE/DATABASE",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bDROP\\s+(TABLE|DATABASE)\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.eval",
+      "category": "bash",
+      "severity": "high",
+      "description": "eval() — dynamic code execution",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\beval\\s*\\(",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.kill-9",
+      "category": "bash",
+      "severity": "high",
+      "description": "kill -9 — forced process termination",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bkill\\s+-9\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.diskutil-erase",
+      "category": "bash",
+      "severity": "high",
+      "description": "macOS disk format/partition command",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bdiskutil\\s+(eraseDisk|partitionDisk)\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.fdisk-parted",
+      "category": "bash",
+      "severity": "high",
+      "description": "Disk partitioning tools",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bfdisk\\b|\\bparted\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.zsh-module-source",
+      "category": "bash",
+      "severity": "high",
+      "description": "Zsh module/autoload/source — can load arbitrary code",
+      "match": {
+        "kind": "regex",
+        "pattern": "(?:^|\\s|;)\\s*(?:zmodload|zcompile|autoload|source|\\.)\\s+",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.zsh-equals-expansion",
+      "category": "bash",
+      "severity": "high",
+      "description": "Zsh equals expansion (=cmd) — bypasses path validation",
+      "match": {
+        "kind": "regex",
+        "pattern": "(?:^|\\s)=[a-zA-Z]",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.zero-width-unicode",
+      "category": "bash",
+      "severity": "high",
+      "description": "Unicode zero-width character injection — hidden command obfuscation",
+      "match": {
+        "kind": "regex",
+        "pattern": "[\\u200b\\u200c\\u200d\\u2060\\ufeff]",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.ifs-manipulation",
+      "category": "bash",
+      "severity": "high",
+      "description": "IFS variable manipulation — alters shell word splitting",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bIFS\\s*=",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.null-byte-injection",
+      "category": "bash",
+      "severity": "high",
+      "description": "Null byte injection — may truncate strings or bypass checks",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\\\x00|\\\\0|%00|\\$'\\\\0'",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.process-substitution",
+      "category": "bash",
+      "severity": "high",
+      "description": "Process substitution — potential data exfiltration",
+      "match": {
+        "kind": "regex",
+        "pattern": ">\\(|<\\(",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.background-persistence",
+      "category": "bash",
+      "severity": "high",
+      "description": "Background process persistence (nohup/disown/setsid)",
+      "match": {
+        "kind": "regex",
+        "pattern": ";\\s*(?:nohup|disown|setsid)\\s",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.netcat-listener",
+      "category": "bash",
+      "severity": "high",
+      "description": "Netcat listener/exec — potential reverse shell or data exfiltration",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\b(nc|ncat|netcat|socat)\\b.*(?:-l|-e|-c)",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.crontab-modify",
+      "category": "bash",
+      "severity": "high",
+      "description": "Crontab modification — can install persistent scheduled tasks",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bcrontab\\s+-[er]",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.ssh-key-manipulation",
+      "category": "bash",
+      "severity": "high",
+      "description": "SSH key generation/agent manipulation",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bssh-keygen\\b|\\bssh-add\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.interpreter-inline-code",
+      "category": "bash",
+      "severity": "high",
+      "description": "Interpreter inline code execution — bypasses file-level governance",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\b(python|python3|node|ruby|perl|php|lua)\\s+-[ec]\\s",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.package-runner",
+      "category": "bash",
+      "severity": "high",
+      "description": "Package runner execution — runs arbitrary packages",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\b(npx|bunx|pnpx)\\s+[^-]",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.dangerous-zsh-builtin",
+      "category": "bash",
+      "severity": "high",
+      "description": "Dangerous Zsh builtin command",
+      "match": {
+        "kind": "regex",
+        "pattern": "(?:^|\\s|;)\\s*(?:bindkey|compctl|compadd|compdef|zle|vared|rehash|unlimit|limit|sched|zsocket|zselect|ztcp)\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.git-push",
+      "category": "bash",
+      "severity": "medium",
+      "description": "git push — pushes to remote",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bgit\\s+push\\b(?!.*--force)(?!.*-f\\b)",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.npm-publish",
+      "category": "bash",
+      "severity": "medium",
+      "description": "npm publish — publishes package to registry",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bnpm\\s+publish\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.pip-install-adhoc",
+      "category": "bash",
+      "severity": "medium",
+      "description": "pip install (ad-hoc, not from requirements file)",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bpip\\s+install\\b(?!.*-r\\s)",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.docker-rm",
+      "category": "bash",
+      "severity": "medium",
+      "description": "docker rm/rmi — removes containers or images",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bdocker\\s+(rm|rmi)\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.service-restart",
+      "category": "bash",
+      "severity": "medium",
+      "description": "Service restart/stop command",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\b(systemctl|service)\\s+(restart|stop)\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.git-checkout-discard",
+      "category": "bash",
+      "severity": "medium",
+      "description": "git checkout/restore . — discards all unstaged changes",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bgit\\s+checkout\\s+\\.\\s*$|\\bgit\\s+restore\\s+\\.\\s*$",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.git-clean-force",
+      "category": "bash",
+      "severity": "medium",
+      "description": "git clean -f — removes untracked files",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bgit\\s+clean\\s+-[^\\s]*f",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.git-branch-force-delete",
+      "category": "bash",
+      "severity": "medium",
+      "description": "git branch -D — force-delete branch",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bgit\\s+branch\\s+-D\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.git-read",
+      "category": "bash",
+      "severity": "low",
+      "description": "Safe git read commands",
+      "match": {
+        "kind": "regex",
+        "pattern": "^\\s*(git\\s+status|git\\s+log|git\\s+diff|git\\s+show)\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.ls",
+      "category": "bash",
+      "severity": "low",
+      "description": "Directory listing",
+      "match": {
+        "kind": "regex",
+        "pattern": "^\\s*ls\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.file-view",
+      "category": "bash",
+      "severity": "low",
+      "description": "File viewing commands",
+      "match": {
+        "kind": "regex",
+        "pattern": "^\\s*(cat|head|tail|less|more)\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.echo",
+      "category": "bash",
+      "severity": "low",
+      "description": "Echo command",
+      "match": {
+        "kind": "regex",
+        "pattern": "^\\s*echo\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.test-runner",
+      "category": "bash",
+      "severity": "low",
+      "description": "Test runner commands",
+      "match": {
+        "kind": "regex",
+        "pattern": "^\\s*(npm\\s+test|npx\\s+jest|pytest|python\\s+-m\\s+pytest)\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.info-commands",
+      "category": "bash",
+      "severity": "low",
+      "description": "Safe informational commands",
+      "match": {
+        "kind": "regex",
+        "pattern": "^\\s*(pwd|whoami|hostname|uname|date|wc|sort|uniq)\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.search-commands",
+      "category": "bash",
+      "severity": "low",
+      "description": "Search/find commands",
+      "match": {
+        "kind": "regex",
+        "pattern": "^\\s*(grep|rg|find|fd)\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.script-runner",
+      "category": "bash",
+      "severity": "low",
+      "description": "Build/script runner commands",
+      "match": {
+        "kind": "regex",
+        "pattern": "^\\s*(npm\\s+run|yarn\\s+run|make)\\b",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    }
+  ]
+}

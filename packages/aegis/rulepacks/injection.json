@@ -1,0 +1,254 @@
+{
+  "packId": "aegis-builtin-injection",
+  "version": "1.0.0",
+  "source": "ported from AutoHarness autoharness/validation/rails.py (PromptInjectionRail._DEFAULT_PATTERNS)",
+  "rules": [
+    {
+      "id": "injection.ignore-previous-instructions",
+      "category": "injection",
+      "severity": "high",
+      "description": "Prompt injection: 'ignore previous instructions'",
+      "match": {
+        "kind": "regex",
+        "pattern": "ignore\\s+(all\\s+)?previous\\s+instructions",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.ignore-above-instructions",
+      "category": "injection",
+      "severity": "high",
+      "description": "Prompt injection: 'ignore above instructions'",
+      "match": {
+        "kind": "regex",
+        "pattern": "ignore\\s+(all\\s+)?above\\s+instructions",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.disregard-previous",
+      "category": "injection",
+      "severity": "high",
+      "description": "Prompt injection: 'disregard previous'",
+      "match": {
+        "kind": "regex",
+        "pattern": "disregard\\s+(all\\s+)?previous",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.you-are-now",
+      "category": "injection",
+      "severity": "medium",
+      "description": "Prompt injection: persona override 'you are now'",
+      "match": {
+        "kind": "regex",
+        "pattern": "you\\s+are\\s+now\\b",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.forget-everything",
+      "category": "injection",
+      "severity": "high",
+      "description": "Prompt injection: 'forget everything/all'",
+      "match": {
+        "kind": "regex",
+        "pattern": "forget\\s+(everything|all)\\s+",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.new-instructions",
+      "category": "injection",
+      "severity": "high",
+      "description": "Prompt injection: 'new instructions:'",
+      "match": {
+        "kind": "regex",
+        "pattern": "new\\s+instructions?\\s*:",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.system-prompt-directive",
+      "category": "injection",
+      "severity": "high",
+      "description": "Prompt injection: 'system prompt:' directive",
+      "match": {
+        "kind": "regex",
+        "pattern": "system\\s*prompt\\s*:",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.override-instructions",
+      "category": "injection",
+      "severity": "high",
+      "description": "Prompt injection: 'override your/the instructions'",
+      "match": {
+        "kind": "regex",
+        "pattern": "override\\s+(your|the)\\s+instructions",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.do-not-follow-original",
+      "category": "injection",
+      "severity": "high",
+      "description": "Prompt injection: 'do not follow your/the original/previous'",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bdo\\s+not\\s+follow\\s+(your|the)\\s+(original|previous)\\b",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.pretend-you-are",
+      "category": "injection",
+      "severity": "medium",
+      "description": "Prompt injection: 'pretend you are'",
+      "match": {
+        "kind": "regex",
+        "pattern": "pretend\\s+you\\s+are\\b",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.act-as-if",
+      "category": "injection",
+      "severity": "medium",
+      "description": "Prompt injection: 'act as if you are/were'",
+      "match": {
+        "kind": "regex",
+        "pattern": "act\\s+as\\s+if\\s+you\\s+(are|were)\\b",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.admin-root-mode",
+      "category": "injection",
+      "severity": "high",
+      "description": "Prompt injection: 'ADMIN MODE' / 'ROOT MODE'",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\b(ADMIN|ROOT)\\s*MODE\\b",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.jailbreak",
+      "category": "injection",
+      "severity": "high",
+      "description": "Prompt injection: 'jailbreak'",
+      "match": {
+        "kind": "regex",
+        "pattern": "jailbreak",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.system-override-line",
+      "category": "injection",
+      "severity": "high",
+      "description": "Prompt injection: line-leading 'SYSTEM[ OVERRIDE]:' directive",
+      "match": {
+        "kind": "regex",
+        "pattern": "^SYSTEM\\s*(?:OVERRIDE)?\\s*:",
+        "flags": "im",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.system-override-phrase",
+      "category": "injection",
+      "severity": "high",
+      "description": "Prompt injection: 'SYSTEM OVERRIDE' phrase",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\bSYSTEM\\s+OVERRIDE\\b",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.chatml-im-tokens",
+      "category": "injection",
+      "severity": "high",
+      "description": "ChatML special token injection (<|im_start|> / <|im_end|>)",
+      "match": {
+        "kind": "regex",
+        "pattern": "<\\|im_(start|end)\\|>",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.endoftext-token",
+      "category": "injection",
+      "severity": "high",
+      "description": "Special token injection (<|endoftext|>)",
+      "match": {
+        "kind": "regex",
+        "pattern": "<\\|endoftext\\|>",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.inst-tokens",
+      "category": "injection",
+      "severity": "high",
+      "description": "Llama-style instruction token injection ([INST] / [/INST])",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\[INST\\]|\\[/INST\\]",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "injection.sentence-tokens",
+      "category": "injection",
+      "severity": "high",
+      "description": "Sentence boundary token injection (<s> / </s>)",
+      "match": {
+        "kind": "regex",
+        "pattern": "(?<![a-zA-Z])</s>(?![a-zA-Z>])|(?<![a-zA-Z/])<s>(?![a-zA-Z>])",
+        "flags": "i",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    }
+  ]
+}
