@@ -1,0 +1,43 @@
+{
+  "packId": "aegis-builtin-pii",
+  "version": "1.0.0",
+  "source": "ported from AutoHarness autoharness/validation/rails.py (PIIRedactionRail)",
+  "rules": [
+    {
+      "id": "pii.email",
+      "category": "pii",
+      "severity": "medium",
+      "description": "Email address",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\\b",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "pii.us-phone",
+      "category": "pii",
+      "severity": "medium",
+      "description": "US phone number",
+      "match": {
+        "kind": "regex",
+        "pattern": "(?<!\\d)(?:\\+?1[\\s.-]?)?(?:\\(?\\d{3}\\)?[\\s.-]?)\\d{3}[\\s.-]?\\d{4}(?!\\d)",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    },
+    {
+      "id": "pii.us-ssn",
+      "category": "pii",
+      "severity": "high",
+      "description": "US Social Security Number",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\b\\d{3}[\\s-]?\\d{2}[\\s-]?\\d{4}\\b",
+        "target": "content"
+      },
+      "appliesTo": ["*"]
+    }
+  ]
+}

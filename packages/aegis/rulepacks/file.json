@@ -1,0 +1,358 @@
+{
+  "packId": "aegis-builtin-file",
+  "version": "1.0.0",
+  "source": "ported from AutoHarness autoharness/rules/builtin.py (file_write + file_read categories)",
+  "rules": [
+    {
+      "id": "file_write.env-file",
+      "category": "file_write",
+      "severity": "critical",
+      "description": "Environment file with potential secrets",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\.env($|\\.local$|\\.production$|\\.secret$)",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.cert-key",
+      "category": "file_write",
+      "severity": "critical",
+      "description": "Certificate/key file",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\.(pem|key|cert|p12|pfx|jks)$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.credentials",
+      "category": "file_write",
+      "severity": "critical",
+      "description": "Credentials file",
+      "match": {
+        "kind": "regex",
+        "pattern": "credentials(\\.json|\\.yaml|\\.yml|\\.xml|\\.toml)?$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.ssh-dir",
+      "category": "file_write",
+      "severity": "critical",
+      "description": "SSH directory — private keys, config, authorized_keys",
+      "match": {
+        "kind": "regex",
+        "pattern": "(^|/)\\.ssh/",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.ssh-key-file",
+      "category": "file_write",
+      "severity": "critical",
+      "description": "SSH key files",
+      "match": {
+        "kind": "regex",
+        "pattern": "id_(rsa|ed25519|ecdsa|dsa)($|\\.pub$)",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.aws-credentials",
+      "category": "file_write",
+      "severity": "critical",
+      "description": "AWS credentials/config file",
+      "match": {
+        "kind": "regex",
+        "pattern": "(^|/)\\.aws/(credentials|config)$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.kube-config",
+      "category": "file_write",
+      "severity": "critical",
+      "description": "Kubernetes config (may contain cluster secrets)",
+      "match": {
+        "kind": "regex",
+        "pattern": "(^|/)\\.kube/config$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.package-json",
+      "category": "file_write",
+      "severity": "high",
+      "description": "Node.js package manifest — can change deps, scripts",
+      "match": {
+        "kind": "regex",
+        "pattern": "package\\.json$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.dockerfile",
+      "category": "file_write",
+      "severity": "high",
+      "description": "Docker configuration — affects build/deploy",
+      "match": {
+        "kind": "regex",
+        "pattern": "Dockerfile$|docker-compose\\.(yml|yaml)$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.github-actions",
+      "category": "file_write",
+      "severity": "high",
+      "description": "GitHub Actions CI config",
+      "match": {
+        "kind": "regex",
+        "pattern": "(^|/)\\.github/(workflows|actions)/",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.gitlab-ci",
+      "category": "file_write",
+      "severity": "high",
+      "description": "GitLab CI configuration",
+      "match": {
+        "kind": "regex",
+        "pattern": "(^|/)\\.gitlab-ci\\.yml$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.deployment-config",
+      "category": "file_write",
+      "severity": "high",
+      "description": "Deployment configuration file",
+      "match": {
+        "kind": "regex",
+        "pattern": "(deploy|deployment)\\.(yml|yaml|json|toml)$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.build-entrypoint",
+      "category": "file_write",
+      "severity": "high",
+      "description": "Build system entry point",
+      "match": {
+        "kind": "regex",
+        "pattern": "Makefile$|Rakefile$|Taskfile\\.(yml|yaml)$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.circleci-config",
+      "category": "file_write",
+      "severity": "high",
+      "description": "CircleCI configuration",
+      "match": {
+        "kind": "regex",
+        "pattern": "(^|/)\\.circleci/config\\.yml$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.jenkinsfile",
+      "category": "file_write",
+      "severity": "high",
+      "description": "Jenkins pipeline definition",
+      "match": {
+        "kind": "regex",
+        "pattern": "(^|/)Jenkinsfile$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.config-file",
+      "category": "file_write",
+      "severity": "medium",
+      "description": "Configuration file",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\.(cfg|conf|config|ini|toml|yml|yaml)$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.lock-file",
+      "category": "file_write",
+      "severity": "medium",
+      "description": "Dependency lock file",
+      "match": {
+        "kind": "regex",
+        "pattern": "(package-lock|yarn\\.lock|pnpm-lock|Pipfile\\.lock|poetry\\.lock|Cargo\\.lock|Gemfile\\.lock).*$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_write.gitignore",
+      "category": "file_write",
+      "severity": "medium",
+      "description": "Git ignore rules — may expose secrets if modified",
+      "match": {
+        "kind": "regex",
+        "pattern": "(^|/)\\.gitignore$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Write", "Edit"]
+    },
+    {
+      "id": "file_read.ssh-private-key",
+      "category": "file_read",
+      "severity": "critical",
+      "description": "SSH private key (no .pub extension)",
+      "match": {
+        "kind": "regex",
+        "pattern": "id_(rsa|ed25519|ecdsa|dsa)$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Read"]
+    },
+    {
+      "id": "file_read.env-local",
+      "category": "file_read",
+      "severity": "critical",
+      "description": "Local environment overrides — typically has real secrets",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\.env\\.local$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Read"]
+    },
+    {
+      "id": "file_read.private-key",
+      "category": "file_read",
+      "severity": "critical",
+      "description": "Private key / certificate key file",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\.(pem|key)$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Read"]
+    },
+    {
+      "id": "file_read.env-file",
+      "category": "file_read",
+      "severity": "high",
+      "description": "Environment file likely containing secrets",
+      "match": {
+        "kind": "regex",
+        "pattern": "\\.env($|\\.production$|\\.secret$)",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Read"]
+    },
+    {
+      "id": "file_read.credentials",
+      "category": "file_read",
+      "severity": "high",
+      "description": "Credentials file",
+      "match": {
+        "kind": "regex",
+        "pattern": "credentials(\\.json|\\.yaml|\\.yml|\\.xml|\\.toml)?$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Read"]
+    },
+    {
+      "id": "file_read.aws-credentials",
+      "category": "file_read",
+      "severity": "high",
+      "description": "AWS credentials/config",
+      "match": {
+        "kind": "regex",
+        "pattern": "(^|/)\\.aws/(credentials|config)$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Read"]
+    },
+    {
+      "id": "file_read.netrc",
+      "category": "file_read",
+      "severity": "high",
+      "description": ".netrc — plaintext login credentials",
+      "match": {
+        "kind": "regex",
+        "pattern": "(^|/)\\.netrc$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Read"]
+    },
+    {
+      "id": "file_read.system-files",
+      "category": "file_read",
+      "severity": "high",
+      "description": "Sensitive system file (shadow/passwd/sudoers)",
+      "match": {
+        "kind": "regex",
+        "pattern": "(^|/)(etc/shadow|etc/passwd|etc/sudoers)$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Read"]
+    },
+    {
+      "id": "file_read.ssh-key-or-config",
+      "category": "file_read",
+      "severity": "high",
+      "description": "SSH key or config file",
+      "match": {
+        "kind": "regex",
+        "pattern": "(^|/)\\.ssh/(id_rsa|id_ed25519|id_ecdsa|id_dsa|authorized_keys|config)$",
+        "flags": "m",
+        "target": "path"
+      },
+      "appliesTo": ["Read"]
+    }
+  ]
+}
