@@ -55,6 +55,11 @@ export type {
   EmbeddingProvider,
   JudgeProvider,
   JudgeResult,
+  PolicyRuleKind,
+  PolicyRule,
+  PolicyRuleSet,
+  PolicyEvidenceRow,
+  ConditionalPredicate,
 } from './breaker/types.js';
 
 // Circuit Breaker
@@ -97,8 +102,13 @@ export { ConfigValidationError } from './config/loader.js';
 export type { LatticeConfig } from './config/loader.js';
 
 // Redaction
-export { redactContract } from './events/redact.js';
-export type { RedactOptions, SensitivityLevel } from './events/redact.js';
+export { redactContract, redactJson } from './events/redact.js';
+export type {
+  RedactOptions,
+  RedactJsonOptions,
+  RedactJsonResult,
+  SensitivityLevel,
+} from './events/redact.js';
 
 // ConsensusReducer
 export { ConsensusReducer } from './reducer/consensus.js';
@@ -186,3 +196,21 @@ export type {
   RotateResult,
   TokenStoreOptions,
 } from './auth/token-store.js';
+
+// API handler (GIN-7) — null-safe input validation for contract creation.
+export { handleCreateContract, collectValidationErrors, InputValidationError } from './api/handler.js';
+export type {
+  CreateContractRequest,
+  HandlerResponse,
+  HandlerSuccess,
+  HandlerError,
+} from './api/handler.js';
+
+// Session management (GIN-25) — null-safe user session lifecycle.
+export { SessionManager } from './session/session-manager.js';
+export { SessionNotFoundError, SessionInvalidError } from './session/types.js';
+export type {
+  UserSession,
+  SessionStatus,
+  SessionManagerOptions,
+} from './session/types.js';

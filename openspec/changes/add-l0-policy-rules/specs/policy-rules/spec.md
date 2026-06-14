@@ -51,7 +51,7 @@ When `config.policy` is unset, `contract.metadata.l0` MUST NOT be set.
 
 ### R4 — Rule kinds
 
-L0 MUST support seven rule kinds with the semantics below.
+L0 MUST support eight rule kinds with the semantics below.
 
 - `allowlist`: value at JSONPath MUST equal one of `values`. Resolves to `fail` when path resolves but value is outside the set. Resolves to `fail` when path does not resolve.
 - `denylist`: value at JSONPath MUST NOT equal any of `values`. Resolves to `pass` when path does not resolve.
@@ -59,7 +59,12 @@ L0 MUST support seven rule kinds with the semantics below.
 - `numeric-bound`: value at JSONPath, when numeric, MUST satisfy the comparison. Resolves to `fail` when path does not resolve or value is non-numeric.
 - `required`: JSONPath MUST resolve to a non-null, defined value.
 - `forbidden`: JSONPath MUST resolve to null or be absent.
-- `custom`: `evaluate(contract)` MUST return `true` (pass) or `false` (fail). Function MUST be pure and synchronous.
+- `conditional`: declarative if/then over two JSONPaths. Configuration:
+  - `when` — `{ jsonpath: string, predicate: 'resolves' | 'is-truthy' | 'matches', value?: string }`. `resolves` = path resolves to non-null/non-undefined; `is-truthy` = resolves AND JS-truthy; `matches` = resolves AND string-equals `value`.
+  - `then` — `{ jsonpath: string, predicate: 'resolves' | 'is-truthy' | 'matches', value?: string }`. Same predicate vocabulary.
+  - Semantics: when `when` is satisfied, `then` MUST be satisfied (pass) else `fail`. When `when` is NOT satisfied, the rule resolves `pass` (vacuously). Failure detail string is `'when-satisfied-then-failed:<then.jsonpath>'`.
+  - Designed for cross-field invariants like Spec 3's `intent_planned_before_action`: `when $.intent.action resolves, then $.intent.step_trace_id resolves`.
+- `custom`: `evaluate(contract)` MUST return `true` (pass) or `false` (fail). Function MUST be pure and synchronous. Reserved for predicates that cannot be expressed with the other seven kinds; prefer `conditional` when possible. See R9 for the CI-only determinism gate.
 
 ### R5 — Determinism
 

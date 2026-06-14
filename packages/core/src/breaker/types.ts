@@ -1,11 +1,108 @@
+import type { StateContract } from '../contract/types.js';
+
 /**
  * Validation tier levels for the Circuit Breaker.
  *
+ * - L0: Deterministic policy rules (JSONPath predicates) — runs before L1 when a
+ *   `PolicyRuleSet` is bound. Hard-no on any rule failure.
  * - L1: Structural (JSON Schema) — deterministic, zero LLM calls
  * - L2: Semantic consistency (embedding similarity) — requires user-injected EmbeddingProvider
  * - L3: LLM-as-judge — requires user-injected JudgeProvider
  */
-export type ValidationTier = 'L1' | 'L2' | 'L3';
+export type ValidationTier = 'L0' | 'L1' | 'L2' | 'L3';
+
+/**
+ * Discriminator for the eight L0 rule kinds supported by Lattice's policy tier.
+ */
+export type PolicyRuleKind =
+  | 'allowlist'
+  | 'denylist'
+  | 'regex-deny'
+  | 'numeric-bound'
+  | 'required'
+  | 'forbidden'
+  | 'conditional'
+  | 'custom';
+
+/**
+ * Predicate vocabulary for the `conditional` rule kind's `when` / `then` clauses.
+ */
+export type ConditionalPredicate =
+  | { jsonpath: string; predicate: 'resolves' }
+  | { jsonpath: string; predicate: 'is-truthy' }
+  | { jsonpath: string; predicate: 'matches'; value: string };
+
+/**
+ * Fields shared by every L0 policy rule, independent of kind. Internal — not exported
+ * from the package root; consumers should use the {@link PolicyRule} union.
+ */
+interface PolicyRuleBase {
+  /** Stable identifier across versions. Used for evidence rows and audit. */
+  id: string;
+  /** Human-readable, one-line. Surfaces in reject reasons. */
+  description: string;
+  /** JSONPath into the StateContract being evaluated. Must start with `$`. */
+  jsonpath: string;
+}
+
+/**
+ * A single L0 policy rule. Discriminated union over {@link PolicyRuleKind}.
+ *
+ * For `conditional` rules, `PolicyRuleBase.jsonpath` MUST equal `when.jsonpath` so
+ * evidence rows surface the path that triggered evaluation. This invariant is
+ * enforced at `PolicyRuleSet` construction time (Task 3), not at the type level.
+ */
+export type PolicyRule =
+  | (PolicyRuleBase & { kind: 'allowlist'; values: readonly string[] })
+  | (PolicyRuleBase & { kind: 'denylist'; values: readonly string[] })
+  | (PolicyRuleBase & { kind: 'regex-deny'; pattern: string; flags?: string })
+  | (PolicyRuleBase & {
+      kind: 'numeric-bound';
+      op: '<=' | '<' | '>=' | '>' | '==';
+      value: number;
+    })
+  | (PolicyRuleBase & { kind: 'required' })
+  | (PolicyRuleBase & { kind: 'forbidden' })
+  | (PolicyRuleBase & {
+      kind: 'conditional';
+      /** Antecedent. When this predicate is satisfied, `then` MUST be satisfied. */
+      when: ConditionalPredicate;
+      /** Consequent. Required only when `when` is satisfied. */
+      then: ConditionalPredicate;
+    })
+  | (PolicyRuleBase & {
+      kind: 'custom';
+      /**
+       * Pure, deterministic, sync. Receives the canonicalized contract.
+       * Prefer `conditional` for cross-field invariants.
+       */
+      evaluate: (contract: StateContract) => boolean;
+    });
+
+/**
+ * A versioned bundle of L0 policy rules. Bound to the breaker via
+ * `TieredCircuitBreakerConfig.policy`.
+ */
+export interface PolicyRuleSet {
+  /** Stable identifier; appears on every evidence row. */
+  id: string;
+  /** Opaque version string. Bumped by hand on rule changes. */
+  version: string;
+  rules: readonly PolicyRule[];
+}
+
+/**
+ * Per-rule result record produced by L0 evaluation and attached to
+ * `contract.metadata.l0.evidence`.
+ */
+export interface PolicyEvidenceRow {
+  ruleId: string;
+  kind: PolicyRuleKind;
+  outcome: 'pass' | 'fail' | 'skip';
+  jsonpath: string;
+  /** Present when outcome = 'fail'. One sentence, no payload values. */
+  detail?: string;
+}
 
 /**
  * Configuration for the tiered Circuit Breaker.
@@ -23,8 +120,17 @@ export interface TieredCircuitBreakerConfig {
    * - 'L1+L2' — structural + embedding similarity
    * - 'L1+L3' — structural + LLM-as-judge
    * - 'L1+L2+L3' — all tiers on every handoff (slowest, most thorough)
+   *
+   * When {@link policy} is set, L0 runs before whatever value is selected here.
    */
   tier?: 'auto' | 'L1' | 'L1+L2' | 'L1+L3' | 'L1+L2+L3';
+
+  /**
+   * Optional L0 deterministic policy rule set. When set, L0 runs before L1/L2/L3
+   * and a rule failure is a hard-no (skips later tiers). Defaults to undefined,
+   * in which case L0 is a no-op and v0.3 ordering applies.
+   */
+  policy?: PolicyRuleSet;
 
   /** Embedding similarity threshold for L2 pass/fail (default: 0.7) */
   l2Threshold?: number;
@@ -88,8 +194,22 @@ export interface TieredCircuitBreakerConfig {
 export interface ValidationResult {
   /** Whether the contract passed validation */
   passed: boolean;
-  /** Which tier the validation was performed at */
+  /**
+   * Tier at which the final pass/fail was determined. For passing
+   * validations this is the last tier that actually ran. For failing
+   * validations this is the tier that produced the failure.
+   */
   tier: ValidationTier;
+  /**
+   * Ordered list of tiers that actually ran during this validate() call.
+   * Skipped tiers (e.g. L1/L2/L3 after an L0 fail; L2/L3 when no
+   * provider is configured) do NOT appear. Adapters use this to compute
+   * the `+`-joined `governance.tier` field (Spec 1 R8).
+   *
+   * Optional for back-compat — when the breaker has no L0 policy bound,
+   * existing call sites can continue to inspect just `tier`.
+   */
+  tiersRun?: ValidationTier[];
   /** Duration in milliseconds */
   durationMs: number;
   /** Failure reason (if failed) */
