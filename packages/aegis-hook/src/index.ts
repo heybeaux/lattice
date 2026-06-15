@@ -13,8 +13,10 @@ export { decide, type Decision } from './decide.js';
 export {
   buildHookConfig,
   mergeIntoSettings,
+  installHook,
   type HookConfig,
   type MatcherEntry,
   type CommandHook,
   type Settings,
+  type InstallResult,
 } from './install.js';
