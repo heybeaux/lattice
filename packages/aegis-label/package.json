@@ -1,0 +1,54 @@
+{
+  "name": "@heybeaux/aegis-label",
+  "version": "0.1.0",
+  "description": "The real action_failed labeling pipeline for Aegis. Mints decision rows from the Sonder audit chain, resolves leak-free failure labels over an outcome window, and appends frozen training rows for the nightly AWM bake.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --dts --sourcemap",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "governance",
+    "harness",
+    "labeling",
+    "tool-use",
+    "safety"
+  ],
+  "author": "heybeaux <https://heybeaux.dev>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/heybeaux/lattice.git",
+    "directory": "packages/aegis-label"
+  },
+  "dependencies": {
+    "@heybeaux/lattice-aegis": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "eslint": "^9.27.0",
+    "tsup": "^8.4.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.1.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
