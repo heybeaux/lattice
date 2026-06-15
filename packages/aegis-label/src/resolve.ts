@@ -87,7 +87,7 @@ function isPrefixPath(prefix: string, full: string): boolean {
   return full[prefix.length] === '/';
 }
 
-function resourcesOf(event: SonderEventLike): string[] {
+export function resourcesOf(event: SonderEventLike): string[] {
   return [...(event.resources ?? []), ...(event.paths ?? [])];
 }
 
@@ -113,7 +113,7 @@ function isDownstreamError(event: SonderEventLike): boolean {
 const ROLLBACK_RE =
   /\b(git\s+(revert|reset|restore|checkout\s+--)|restore[-_]?from[-_]?trash|trash[-_]?restore|rollback|undo)\b/i;
 
-function isRollbackAction(event: SonderEventLike): boolean {
+export function isRollbackAction(event: SonderEventLike): boolean {
   const kind = event.metadata?.['kind'];
   if (kind === 'rollback') return true;
   // Fall back to inspecting the recorded command on the event metadata, when

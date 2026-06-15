@@ -237,6 +237,20 @@ export interface FeatureRow {
   priorFailuresThisSession: number;
   sessionHealthRegime: SessionHealthRegime;
 
+  /**
+   * Walk-backward rollback signal (leak-safe): a rollback action (git
+   * revert/reset/restore, trash-restore, or a `kind:'rollback'` event) hit a
+   * path overlapping this decision's target within the last `rollbackProximityN`
+   * in-session events at/before the decision. 0 when there is no such churn.
+   *
+   * WHY: a clean command can still be doomed when it edits a path the session
+   * just reverted — the reactive rules see nothing (zero rule hits, benign
+   * shape), but the chain shows the path is in an active churn/rollback zone.
+   * This is the only feature that gives the predictor that signal, and it is
+   * strictly backward-looking so it never leaks the post-decision outcome.
+   */
+  rollbackProximity: number;
+
   // Engram priors (queried as-of signalDate)
   histFailRate_toolPath: number;
   secsSinceLastFailHere: number | null;

@@ -17,6 +17,45 @@ import type {
   SessionHealthRegime,
   SonderEventLike,
 } from './types.js';
+import { isRollbackAction, resourcesOf, resourcesOverlap } from './resolve.js';
+
+/**
+ * How many in-session events immediately preceding a decision the rollback-
+ * proximity scan looks back over (label-spec §6 churn window). Kept small and
+ * deterministic: a rollback is "recent" only if it's within the last few actions.
+ */
+export const DEFAULT_ROLLBACK_PROXIMITY_N = 5;
+
+/**
+ * Walk-backward rollback proximity (leak-safe). Scans the last `windowN`
+ * in-session events AT/BEFORE the decision (the caller passes only such events)
+ * for a rollback action whose touched paths overlap the decision's target.
+ *
+ * Returns 1 when such a recent overlapping rollback exists, else 0. Cold-start
+ * safe: empty history (or a decision with no resources) yields 0, never throws.
+ *
+ * Strictly backward-looking — it never inspects the decision's own outcome or any
+ * later event, so it cannot leak the label it helps predict.
+ */
+export function computeRollbackProximity(
+  decisionEvent: SonderEventLike,
+  priorEvents: SonderEventLike[],
+  windowN = DEFAULT_ROLLBACK_PROXIMITY_N,
+): number {
+  const target = resourcesOf(decisionEvent);
+  if (target.length === 0) return 0;
+
+  // Only events strictly before the decision, newest-first, capped at windowN.
+  const preceding = priorEvents.filter((e) => e.id !== decisionEvent.id);
+  const window = preceding.slice(-windowN);
+
+  for (const e of window) {
+    if (isRollbackAction(e) && resourcesOverlap(target, resourcesOf(e))) {
+      return 1;
+    }
+  }
+  return 0;
+}
 
 /** Thrown when a feature would draw from an event after the decision (leak). */
 export class FeatureLeakError extends Error {
@@ -179,6 +218,7 @@ export function assembleFeatures(input: AssembleFeaturesInput): FeatureRow {
     taskDepth: depth,
     priorFailuresThisSession: priorFailures,
     sessionHealthRegime: computeRegime(outcomes),
+    rollbackProximity: computeRollbackProximity(decisionEvent, priorEvents),
     histFailRate_toolPath: prior.histFailRate_toolPath,
     secsSinceLastFailHere: prior.secsSinceLastFailHere,
     engramPriorN: prior.engramPriorN,

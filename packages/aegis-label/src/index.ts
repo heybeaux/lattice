@@ -75,6 +75,8 @@ export type { ResolveOptions } from './resolve.js';
 export {
   assembleFeatures,
   computeRegime,
+  computeRollbackProximity,
+  DEFAULT_ROLLBACK_PROXIMITY_N,
   readDecisionMeta,
   signalDateOf,
   FeatureLeakError,
