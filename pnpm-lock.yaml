@@ -99,6 +99,28 @@ importers:
         specifier: ^3.1.3
         version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.19)(yaml@2.9.0)
 
+  packages/aegis-hook:
+    dependencies:
+      '@heybeaux/lattice-aegis':
+        specifier: workspace:*
+        version: link:../aegis
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.19.19
+      eslint:
+        specifier: ^9.27.0
+        version: 9.39.4
+      tsup:
+        specifier: ^8.4.0
+        version: 8.5.1(postcss@8.5.14)(typescript@5.9.3)(yaml@2.9.0)
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.1.3
+        version: 3.2.4(@types/debug@4.1.13)(@types/node@22.19.19)(yaml@2.9.0)
+
   packages/aegis-label:
     dependencies:
       '@heybeaux/lattice-aegis':
