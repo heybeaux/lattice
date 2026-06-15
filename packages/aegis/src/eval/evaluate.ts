@@ -20,6 +20,7 @@ import type {
   SeverityTable,
   ToolCall,
 } from '../types.js';
+import { extractDecodedVariants } from './preprocess.js';
 
 export const DEFAULT_SEVERITY_TABLE: SeverityTable = {
   critical: 'deny',
@@ -98,6 +99,13 @@ export interface EvaluateOptions {
   predictionThresholds?: PredictionThresholds;
   prediction?: Prediction;
   ruleVersions?: string[];
+  /**
+   * When true, decode-then-rescan preprocessing is applied to Bash commands.
+   * Encoded payloads (base64, hex escapes) are decoded and rules are run against
+   * both the original and decoded variants. The strictest match wins.
+   * Default: false (for backward compat — the hook enables this explicitly).
+   */
+  preprocess?: boolean;
 }
 
 export function evaluate(
@@ -108,22 +116,39 @@ export function evaluate(
   const severityTable = opts.severityTable ?? DEFAULT_SEVERITY_TABLE;
   const thresholds = opts.predictionThresholds ?? DEFAULT_PREDICTION_THRESHOLDS;
 
+  // Build the set of ToolCall variants to test. When preprocessing is on,
+  // decoded variants of the command are synthesized and evaluated in addition
+  // to the original — the strictest result across all variants wins.
+  const callsToTest: ToolCall[] = [call];
+  if (opts.preprocess && call.command) {
+    const variants = extractDecodedVariants(call.command);
+    // Skip index 0 — that's the original, already in callsToTest.
+    for (const variant of variants.slice(1)) {
+      callsToTest.push({ ...call, command: variant });
+    }
+  }
+
   const hits: RuleHit[] = [];
   let maxSeverity: Severity | null = null;
   let topReason = '';
 
-  for (const compiled of compiledRules) {
-    if (!matchesRule(compiled, call)) continue;
-    const { rule } = compiled;
-    hits.push({
-      id: rule.id,
-      severity: rule.severity,
-      category: rule.category,
-      target: rule.match.target,
-    });
-    if (maxSeverity === null || SEVERITY_RANK[rule.severity] > SEVERITY_RANK[maxSeverity]) {
-      maxSeverity = rule.severity;
-      topReason = rule.description;
+  for (const testCall of callsToTest) {
+    for (const compiled of compiledRules) {
+      if (!matchesRule(compiled, testCall)) continue;
+      const { rule } = compiled;
+      // Avoid duplicate hit entries when the same rule fires on multiple variants.
+      if (!hits.some((h) => h.id === rule.id)) {
+        hits.push({
+          id: rule.id,
+          severity: rule.severity,
+          category: rule.category,
+          target: rule.match.target,
+        });
+      }
+      if (maxSeverity === null || SEVERITY_RANK[rule.severity] > SEVERITY_RANK[maxSeverity]) {
+        maxSeverity = rule.severity;
+        topReason = rule.description;
+      }
     }
   }
 

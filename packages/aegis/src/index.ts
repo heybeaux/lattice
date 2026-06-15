@@ -37,3 +37,4 @@ export {
   DEFAULT_PREDICTION_THRESHOLDS,
 } from './eval/evaluate.js';
 export type { EvaluateOptions } from './eval/evaluate.js';
+export { extractDecodedVariants } from './eval/preprocess.js';

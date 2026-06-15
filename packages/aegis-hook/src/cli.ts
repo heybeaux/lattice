@@ -67,7 +67,8 @@ function main(): void {
   }
 
   const call = toToolCall(raw);
-  const evaluation = evaluate(call, loadAllPacks());
+  // Enable decode-then-rescan so obfuscated payloads (base64, hex) are caught.
+  const evaluation = evaluate(call, loadAllPacks(), { preprocess: true });
 
   // Extract tool_use_id for join key (best-effort; undefined when absent).
   const toolUseId: string | undefined =

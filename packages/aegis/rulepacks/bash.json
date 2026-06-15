@@ -88,6 +88,30 @@
       "appliesTo": ["Bash"]
     },
     {
+      "id": "bash.credential-exfil-curl",
+      "category": "bash",
+      "severity": "critical",
+      "description": "Credential exfiltration — curl/wget posting subshell-read of sensitive credential files",
+      "match": {
+        "kind": "regex",
+        "pattern": "(curl|wget)\\b[^\\n]*\\$\\([^)]*cat[^)]*(\\.aws[/\\\\]credentials|\\.ssh[/\\\\]|id_rsa|id_ed25519|\\.gnupg[/\\\\]|netrc|authinfo)[^)]*\\)",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
+      "id": "bash.secret-file-in-network-cmd",
+      "category": "bash",
+      "severity": "critical",
+      "description": "Sensitive credential file read piped or substituted into a network command",
+      "match": {
+        "kind": "regex",
+        "pattern": "(curl|wget|nc|ncat|socat)\\b[^\\n]*(\\.aws[/\\\\]credentials|~[/\\\\]\\.ssh[/\\\\]|[/\\\\]\\.ssh[/\\\\]id_rsa|[/\\\\]\\.ssh[/\\\\]id_ed25519|\\.gnupg|\\.netrc|\\.authinfo)",
+        "target": "command"
+      },
+      "appliesTo": ["Bash"]
+    },
+    {
       "id": "bash.download-and-execute",
       "category": "bash",
       "severity": "critical",
