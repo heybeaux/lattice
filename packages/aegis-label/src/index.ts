@@ -93,3 +93,15 @@ export type { AppendResult, DatasetStoreOptions } from './dataset.js';
 
 // Cold-start priors
 export { coldStartPrior, COLD_START_BASE_RATES } from './cold-start.js';
+
+// Live-chain adapter — ChainReader over a real Sonder AuditLog
+export { SonderChainReader, normalizeEvent } from './sonder-reader.js';
+export type {
+  AuditLogLike,
+  AuditLogQueryFilter,
+  RawDbLike,
+} from './sonder-reader.js';
+
+// Live-chain orchestrator — drives all five stages end-to-end
+export { runLabeling } from './run.js';
+export type { RunLabelingOptions, RunLabelingResult } from './run.js';
