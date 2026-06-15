@@ -17,6 +17,7 @@ import { readStdin, toToolCall } from './stdin.js';
 import { loadAllPacks } from './rules.js';
 import { decide } from './decide.js';
 import { installHook } from './install.js';
+import { recordDecision } from '@heybeaux/aegis-collect';
 
 /**
  * `aegis-hook install [settingsPath] [bin]` — merge the hook into settings.json.
@@ -67,6 +68,24 @@ function main(): void {
 
   const call = toToolCall(raw);
   const evaluation = evaluate(call, loadAllPacks());
+
+  // Extract tool_use_id for join key (best-effort; undefined when absent).
+  const toolUseId: string | undefined =
+    raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+      ? (() => {
+          const v = (raw as Record<string, unknown>)['tool_use_id'];
+          return typeof v === 'string' ? v : undefined;
+        })()
+      : undefined;
+
+  // Record the decision for training data collection. Wrapped in its own
+  // try/catch so a collector bug can never reach the hook's exit logic.
+  try {
+    recordDecision(call, evaluation, toolUseId);
+  } catch {
+    // Intentionally swallowed — fail-open.
+  }
+
   const { exitCode, stderr } = decide(evaluation);
   if (stderr) process.stderr.write(stderr + '\n');
   process.exit(exitCode);

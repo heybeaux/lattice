@@ -1,7 +1,7 @@
 {
-  "name": "@heybeaux/aegis-hook",
+  "name": "@heybeaux/aegis-collect",
   "version": "0.1.0",
-  "description": "The Claude Code PreToolUse hook that runs the Aegis governance engine live. Maps Claude Code's hook stdin into an Aegis ToolCall, evaluates the bundled rule packs, and emits the correct PreToolUse permission-decision schema. Ships a settings.json installer with the CORRECT nested matcher schema (the one AutoHarness shipped broken).",
+  "description": "Live data-collection harness for Aegis: records every Claude Code tool-call decision and its outcome so we can grow a real training dataset for the AWM predictor.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -13,13 +13,14 @@
     }
   },
   "bin": {
-    "aegis-hook": "./dist/cli.js"
+    "aegis-outcome": "./dist/outcome.js"
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "tsup src/index.ts src/cli.ts --format esm --dts --sourcemap",
+    "build": "tsup src/index.ts src/outcome.ts src/build-dataset.ts --format esm --dts --sourcemap",
+    "build-dataset": "node dist/build-dataset.js",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -30,26 +31,22 @@
     "agent",
     "governance",
     "harness",
-    "claude-code",
-    "hook",
-    "pretooluse",
-    "tool-use",
-    "safety"
+    "aegis",
+    "data-collection",
+    "training"
   ],
   "author": "heybeaux <https://heybeaux.dev>",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/heybeaux/lattice.git",
-    "directory": "packages/aegis-hook"
+    "directory": "packages/aegis-collect"
   },
   "dependencies": {
-    "@heybeaux/lattice-aegis": "workspace:*",
-    "@heybeaux/aegis-collect": "workspace:*"
+    "@heybeaux/lattice-aegis": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
-    "eslint": "^9.27.0",
     "tsup": "^8.4.0",
     "typescript": "^5.8.3",
     "vitest": "^3.1.3"
