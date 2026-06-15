@@ -13,6 +13,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { runBenchmark } from './run.js';
 import { toMarkdown, toJSON } from './report.js';
+import { runRealBenchmark, type RealBenchmarkResult } from './real.js';
 
 /** The committed baseline artifact stem (spec §4 file layout). */
 const BASELINE_STEM = 'baseline-2026-06-14';
@@ -25,6 +26,8 @@ interface CliArgs {
   episodes: number;
   out: string;
   format: Format;
+  /** Path to a real labeled dataset JSONL (the `real` subcommand). */
+  dataset?: string;
 }
 
 const DEFAULTS = {
@@ -57,6 +60,9 @@ function parseArgs(argv: readonly string[]): CliArgs {
         break;
       case '--format':
         args.format = requireFormat(argv[++i]);
+        break;
+      case '--dataset':
+        args.dataset = requireValue(argv[++i], '--dataset');
         break;
       default:
         // Ignore the leading command token and any unknown flags' positional values.
@@ -117,8 +123,12 @@ function main(): void {
   }
 
   const args = parseArgs(argv);
+  if (args.command === 'real') {
+    runReal(args);
+    return;
+  }
   if (args.command !== 'run') {
-    fail(`unknown command "${args.command}" (expected "run")`);
+    fail(`unknown command "${args.command}" (expected "run" or "real")`);
   }
 
   const result = runBenchmark({ seed: args.seed, episodes: args.episodes });
@@ -167,6 +177,101 @@ function printSummary(
         `fp ${(s.overall.falsePositiveRate * 100).toFixed(1).padStart(5)}%`,
     );
   }
+  lines.push('');
+  lines.push(`Wrote: ${written.join(', ')}`);
+  lines.push('');
+  process.stdout.write(lines.join('\n'));
+}
+
+/** The `real` subcommand: score a real labeled dataset, write a dated result. */
+function runReal(args: CliArgs): void {
+  if (args.dataset === undefined) {
+    fail('real: --dataset <path-to-jsonl> is required');
+  }
+  const datasetPath = resolve(process.cwd(), args.dataset);
+  const result = runRealBenchmark(datasetPath);
+
+  const outDir = resolve(process.cwd(), args.out);
+  mkdirSync(outDir, { recursive: true });
+
+  const stem = `real-${todayStamp()}`;
+  const written: string[] = [];
+  if (args.format === 'json' || args.format === 'both') {
+    const p = join(outDir, `${stem}.json`);
+    writeFileSync(p, JSON.stringify(result, null, 2) + '\n', 'utf8');
+    written.push(p);
+  }
+  if (args.format === 'md' || args.format === 'both') {
+    const p = join(outDir, `${stem}.md`);
+    writeFileSync(p, realToMarkdown(result), 'utf8');
+    written.push(p);
+  }
+
+  printRealSummary(result, written);
+}
+
+/** YYYY-MM-DD stamp for the real-result filename. */
+function todayStamp(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+/** Markdown report for the real-data axis. */
+function realToMarkdown(r: RealBenchmarkResult): string {
+  const pct = (x: number) => `${(x * 100).toFixed(1)}%`;
+  const lines: string[] = [];
+  lines.push('# aegis-bench — REAL-data result');
+  lines.push('');
+  lines.push(`> DATA: REAL (Sonder ed25519-signed audit chain → aegis-label \`action_failed\`)`);
+  lines.push(`> dataset: \`${r.datasetPath}\``);
+  lines.push('');
+  lines.push(
+    `Rows: ${r.totalRows} total · ${r.scoredRows} scored · ${r.excludedRows} excluded (unknowable). ` +
+      `Real failures in scored set: **${r.actualFailures}**.`,
+  );
+  lines.push('');
+  lines.push('## Engine comparison (binary classification on real `action_failed`)');
+  lines.push('');
+  lines.push('| engine | TP | FP | FN | TN | precision | recall | F1 | accuracy |');
+  lines.push('|---|---:|---:|---:|---:|---:|---:|---:|---:|');
+  for (const e of r.engines) {
+    lines.push(
+      `| ${e.engine} | ${e.tp} | ${e.fp} | ${e.fn} | ${e.tn} | ` +
+        `${pct(e.precision)} | ${pct(e.recall)} | ${pct(e.f1)} | ${pct(e.accuracy)} |`,
+    );
+  }
+  lines.push('');
+  lines.push('## Headline');
+  lines.push('');
+  lines.push(
+    `Predictive layer caught **${r.extraFailuresCaught}** real failure(s) the reactive ` +
+      `rule floor missed — a recall lift of **${pct(r.recallLift)}** over the rule floor's misses.`,
+  );
+  lines.push('');
+  return lines.join('\n');
+}
+
+function printRealSummary(r: RealBenchmarkResult, written: readonly string[]): void {
+  const pct = (x: number) => `${(x * 100).toFixed(1)}%`.padStart(6);
+  const lines: string[] = [];
+  lines.push('DATA: REAL (Sonder signed audit chain → aegis-label action_failed)');
+  lines.push(`dataset=${r.datasetPath}`);
+  lines.push(
+    `rows: ${r.totalRows} total / ${r.scoredRows} scored / ${r.excludedRows} excluded / ` +
+      `${r.actualFailures} real failures`,
+  );
+  lines.push('');
+  lines.push('engine              precision  recall      F1   (TP/FP/FN/TN)');
+  for (const e of r.engines) {
+    lines.push(
+      `  ${e.engine.padEnd(16)} ${pct(e.precision)} ${pct(e.recall)} ${pct(e.f1)}   ` +
+        `(${e.tp}/${e.fp}/${e.fn}/${e.tn})`,
+    );
+  }
+  lines.push('');
+  lines.push(
+    `Headline: predictor caught ${r.extraFailuresCaught} extra real failure(s) vs rule floor ` +
+      `(recall lift ${pct(r.recallLift).trim()}).`,
+  );
   lines.push('');
   lines.push(`Wrote: ${written.join(', ')}`);
   lines.push('');

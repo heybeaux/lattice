@@ -94,3 +94,13 @@ export {
 
 // ---- PRNG (exposed so downstream can reproduce seeded draws) ----
 export { mulberry32, type Rng } from './prng.js';
+
+// ---- REAL-data axis (first non-synthetic benchmark; consumes aegis-label output) ----
+export {
+  runRealBenchmark,
+  parseDataset,
+  type RealBenchmarkResult,
+  type RealEngineMetrics,
+  type RealEngine,
+  type FrozenRowLike,
+} from './real.js';

@@ -1,0 +1,34 @@
+{
+  "dataSource": "real",
+  "datasetPath": "/Users/beauxwalton/Dev/lattice/packages/aegis-bench/results/real-2026-06-15.dataset.jsonl",
+  "totalRows": 22,
+  "scoredRows": 22,
+  "excludedRows": 0,
+  "actualFailures": 8,
+  "engines": [
+    {
+      "engine": "regex",
+      "tp": 6,
+      "fp": 0,
+      "fn": 2,
+      "tn": 14,
+      "precision": 1,
+      "recall": 0.75,
+      "f1": 0.8571428571428571,
+      "accuracy": 0.9090909090909091
+    },
+    {
+      "engine": "regex+awm",
+      "tp": 7,
+      "fp": 2,
+      "fn": 1,
+      "tn": 12,
+      "precision": 0.7777777777777778,
+      "recall": 0.875,
+      "f1": 0.823529411764706,
+      "accuracy": 0.8636363636363636
+    }
+  ],
+  "recallLift": 0.5,
+  "extraFailuresCaught": 1
+}
