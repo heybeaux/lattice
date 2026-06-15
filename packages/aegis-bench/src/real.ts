@@ -57,6 +57,12 @@ export interface FrozenRowLike {
     priorFailuresThisSession: number;
     histFailRate_toolPath: number;
     pathsTouched: number;
+    /**
+     * Walk-backward rollback churn signal (aegis-label feature). 1 when a
+     * rollback hit an overlapping path within the lookback window before this
+     * decision. Optional so older datasets (pre-feature) still parse as 0.
+     */
+    rollbackProximity?: number;
   };
   action_failed: 0 | 1 | null;
   labelReason: string | null;
@@ -114,16 +120,36 @@ function regexPredictsFailure(row: FrozenRowLike): boolean {
   return sev === 'high' || sev === 'critical';
 }
 
+/**
+ * Failure prior contributed by the walk-backward rollback-proximity feature.
+ * A path that was just reverted is in an active churn zone — the next action on
+ * it is disproportionately likely to be reverted again. This is a TARGETED
+ * signal (it names the path), so it earns a high floor on its own; unlike the
+ * blunt session-thrash term it does not fire on unrelated actions.
+ */
+const ROLLBACK_PROXIMITY_PRIOR = 0.6;
+
 /** Predict-failure verdict for the predictive layer (uses REAL session features). */
 function awmPredictsFailure(row: FrozenRowLike): boolean {
   const f = row.features;
+  const rollbackProximity = f.rollbackProximity ?? 0;
   // Session-thrash level from the real regime: thrashing > recovering > clean.
-  const thrash =
+  // GATED: a thrashing session with NO command-shape risk and NO rollback churn
+  // is too blunt a signal on its own (it fired on benign reads/writes — pure
+  // false friction). We only let raw session-thrash escalate when there is also
+  // a command-shape signal (medium+ severity); otherwise the targeted features
+  // (severity prior, history, rollback proximity) carry the prediction. This is
+  // what lets rollback proximity REPLACE thrash as the reason we catch churn
+  // failures while dropping the thrash-only false positives.
+  const sevRank =
+    f.ruleSeverityMax === 'none' || f.ruleSeverityMax === 'low' ? 0 : 1;
+  const rawThrash =
     f.sessionHealthRegime === 'thrashing'
       ? 1
       : f.sessionHealthRegime === 'recovering'
         ? 0.5
         : 0;
+  const thrash = sevRank === 1 ? rawThrash : 0;
   // Cold-start severity prior is the floor; the blender lifts it with the real
   // historical (tool,path) fail-rate and session thrash.
   const severityPrior = COLD_START_BASE_RATES[f.ruleSeverityMax];
@@ -133,9 +159,13 @@ function awmPredictsFailure(row: FrozenRowLike): boolean {
     // Real Engram-style history for this (tool,path).
     failRate: f.histFailRate_toolPath,
   });
-  // Take the strictest of the severity prior and the blended predictor — the
-  // engine only ever escalates (mirrors the production strictest-of rule).
-  const pFailure = Math.max(severityPrior, pred.pFailure);
+  // Strictest-of across every escalating signal (mirrors the production
+  // strictest-of rule — predictions only ever raise the floor, never relax it).
+  const pFailure = Math.max(
+    severityPrior,
+    pred.pFailure,
+    rollbackProximity > 0 ? ROLLBACK_PROXIMITY_PRIOR : 0,
+  );
   return pFailure >= ASK_THRESHOLD;
 }
 

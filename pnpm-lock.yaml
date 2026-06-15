@@ -83,6 +83,9 @@ importers:
         specifier: workspace:*
         version: link:../aegis
     devDependencies:
+      '@heybeaux/aegis-label':
+        specifier: workspace:*
+        version: link:../aegis-label
       '@types/node':
         specifier: ^22.15.0
         version: 22.19.19

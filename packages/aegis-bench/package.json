@@ -21,6 +21,7 @@
   ],
   "scripts": {
     "build": "tsup src/index.ts src/cli.ts --format esm --dts --sourcemap",
+    "gen": "node scripts/gen-aegis-chain.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
@@ -47,6 +48,7 @@
     "@heybeaux/lattice-aegis": "workspace:*"
   },
   "devDependencies": {
+    "@heybeaux/aegis-label": "workspace:*",
     "@types/node": "^22.15.0",
     "eslint": "^9.27.0",
     "tsup": "^8.4.0",
