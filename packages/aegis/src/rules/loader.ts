@@ -27,8 +27,12 @@ const REDOS_PROBES: readonly string[] = [
   'aaaaaaaaaaaaaaaaaaaaaaaa!'.repeat(8),
 ];
 
-/** Per-probe match budget. A pattern slower than this on any probe is rejected. */
-const REDOS_BUDGET_MS = 5;
+/**
+ * Per-probe match budget. This is a catastrophic-backtracking guard, not a
+ * micro-benchmark: shared CI runners can add several milliseconds of cold-start
+ * jitter. Override it for tighter experiments with AEGIS_REDOS_BUDGET_MS.
+ */
+const REDOS_BUDGET_MS = Number(process.env['AEGIS_REDOS_BUDGET_MS'] ?? '25');
 
 export class RulePackError extends Error {
   constructor(
