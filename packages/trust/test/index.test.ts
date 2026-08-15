@@ -8,6 +8,7 @@ import {
   recordFailure,
   recordSuccess,
   restoreTrustRoot,
+  resolveTrustConfig,
   shouldBench,
 } from '../src/index.js';
 
@@ -111,6 +112,38 @@ describe('@heybeaux/lattice-trust', () => {
     const issued = issueNextProbe(root, 2);
     expect(issued.issued?.id).toBe('alpha');
     expect(listDueProbeIds(issued.root, 2)).toEqual(['beta']);
+  });
+
+  it('rejects invalid config values that could break or loop probe scheduling', () => {
+    for (const config of [
+      { probeBase: 0 },
+      { probeBase: Number.NaN },
+      { probeBase: 1.5 },
+      { probeBackoff: 0 },
+      { probeBackoff: -1 },
+      { probeBackoff: Number.POSITIVE_INFINITY },
+      { evidenceMargin: -1 },
+      { evidenceMargin: 0.5 },
+      { evidenceMargin: Number.NaN },
+    ]) {
+      expect(() => resolveTrustConfig(config)).toThrow(RangeError);
+      expect(() => createTrustRoot(config)).toThrow(RangeError);
+    }
+
+    expect(resolveTrustConfig({ probeBase: 1, probeBackoff: 1, evidenceMargin: 0 })).toEqual({
+      probeBase: 1,
+      probeBackoff: 1,
+      evidenceMargin: 0,
+    });
+  });
+
+  it('selects tied probe ids by locale-independent UTF-16 code-unit order', () => {
+    let root = createTrustRoot();
+    root = recordFailure(root, 'ä', 0);
+    root = recordFailure(root, 'z', 0);
+    root = recordFailure(root, 'A', 0);
+
+    expect(listDueProbeIds(root, 2)).toEqual(['A', 'z', 'ä']);
   });
 
   it('serializes, restores, and continues scheduling after root transfer', () => {

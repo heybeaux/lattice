@@ -236,11 +236,35 @@ function updateCapability(
   };
 }
 
+function requireIntegerInRange(
+  name: keyof ResolvedTrustConfig,
+  value: number,
+  minimum: number,
+): number {
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new RangeError(`${name} must be a safe integer >= ${minimum}`);
+  }
+
+  return value;
+}
+
 export function resolveTrustConfig(config: TrustConfig = {}): ResolvedTrustConfig {
   return {
-    probeBase: config.probeBase ?? DEFAULT_TRUST_CONFIG.probeBase,
-    probeBackoff: config.probeBackoff ?? DEFAULT_TRUST_CONFIG.probeBackoff,
-    evidenceMargin: config.evidenceMargin ?? DEFAULT_TRUST_CONFIG.evidenceMargin,
+    probeBase: requireIntegerInRange(
+      'probeBase',
+      config.probeBase ?? DEFAULT_TRUST_CONFIG.probeBase,
+      1,
+    ),
+    probeBackoff: requireIntegerInRange(
+      'probeBackoff',
+      config.probeBackoff ?? DEFAULT_TRUST_CONFIG.probeBackoff,
+      1,
+    ),
+    evidenceMargin: requireIntegerInRange(
+      'evidenceMargin',
+      config.evidenceMargin ?? DEFAULT_TRUST_CONFIG.evidenceMargin,
+      0,
+    ),
   };
 }
 
@@ -333,7 +357,9 @@ export function listDueProbeIds(root: TrustRoot, now?: MonotonicNow | number): s
         return leftAt - rightAt;
       }
 
-      return left.id.localeCompare(right.id);
+      if (left.id < right.id) return -1;
+      if (left.id > right.id) return 1;
+      return 0;
     })
     .map((record) => record.id);
 }
