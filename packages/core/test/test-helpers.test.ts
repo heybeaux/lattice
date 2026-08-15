@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { verifyCustomRuleDeterminism } from '../src/test-helpers.js';
 import type { PolicyRule } from '../src/breaker/types.js';
 import type { StateContract } from '../src/contract/types.js';
@@ -56,18 +56,16 @@ describe('verifyCustomRuleDeterminism', () => {
   });
 
   it('detects Date.now non-determinism (across iterations)', () => {
-    let lastCall = -1;
-    const rule = baseRule('clock', () => {
-      // Branch on whether the clock has moved between calls. With 200 calls
-      // across the suite (100 fixtures × 2 evals), at least one pair will
-      // straddle a millisecond boundary on real wall clock.
-      const now = Date.now();
-      const moved = now !== lastCall;
-      lastCall = now;
-      return moved;
-    });
-    const r = verifyCustomRuleDeterminism(rule);
-    expect(r.passed).toBe(false);
+    let call = 0;
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => call++);
+    const rule = baseRule('clock', () => Date.now() % 2 === 0);
+
+    try {
+      const r = verifyCustomRuleDeterminism(rule);
+      expect(r.passed).toBe(false);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   it('detects an inconsistent throw', () => {
