@@ -5,6 +5,7 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
+import { createRequire } from 'node:module';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,6 +20,15 @@ import type { FrozenRow } from '../src/types.js';
 import { decisionEvent } from './fixtures.js';
 import { assembleFeatures } from '../src/features.js';
 import { stubPriors } from './fixtures.js';
+
+const require = createRequire(import.meta.url);
+let sqliteAvailable = false;
+try {
+  require('node:sqlite');
+  sqliteAvailable = true;
+} catch {
+  // node:sqlite was introduced in Node 22.5; JSONL-only tests still run.
+}
 
 function frozen(
   id: string,
@@ -120,7 +130,9 @@ describe('DatasetStore — index + idempotency', () => {
   });
 });
 
-describe('DatasetStore — SQLite index', () => {
+const sqliteDescribe = sqliteAvailable ? describe : describe.skip;
+
+sqliteDescribe('DatasetStore — SQLite index', () => {
   it('persists the (signalDate, severity) fold index to SQLite and hydrates it', () => {
     const dir = mkdtempSync(join(tmpdir(), 'aegis-label-'));
     tmpDirs.push(dir);
